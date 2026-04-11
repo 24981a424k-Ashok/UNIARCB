@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+env/
+data/
+*.log
+*.sqlite3
+*.db
+*.mp3
+service-account.json
