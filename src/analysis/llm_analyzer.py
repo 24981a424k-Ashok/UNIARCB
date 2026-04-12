@@ -107,7 +107,7 @@ class LLMAnalyzer:
         # Dynamic model selection with fallback
         if not model:
             if "groq.com" in str(client.base_url):
-                model = "llama-3.3-70b-versatile"
+                model = "llama-3.1-70b-versatile"
             else:
                 model = "gpt-4o-mini" # Preferred
 
@@ -238,7 +238,7 @@ IMPORTANT: Output ONLY valid JSON.
         
         # Adjust model for Groq if detected
         if "groq.com" in str(client.base_url):
-             model = "llama-3.3-70b-versatile"
+             model = "llama-3.1-70b-versatile"
 
         prompt = f"""
         Analyze the following news article:
@@ -440,7 +440,7 @@ IMPORTANT: Output ONLY valid JSON.
                 logger.info(f"Using Groq Key #{j+1} fallback for completion.")
                 temp_client = openai.OpenAI(api_key=gkey, base_url="https://api.groq.com/openai/v1")
                 response = temp_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model="llama-3.1-70b-versatile",
                     messages=[
                         {"role": "system", "content": "You are a professional AI assistant. Output ONLY requested data."},
                         {"role": "user", "content": prompt}
@@ -482,49 +482,46 @@ IMPORTANT: Output ONLY valid JSON.
                 
         # Differentiate affected groups based on category
         affected_groups = {
-            "Sports": "Athletes, Teams, Coaches, and Sports Fans",
-            "Politics": "Government Officials, Policy Makers, and Citizens",
-            "Technology": "Tech Developers, Industry Competitors, and Early Adopters",
-            "Business & Economy": "Investors, Corporate Leaders, and Market Analysts",
-            "Science & Health": "Scientific Researchers, Healthcare Professionals, and the Global Community",
-            "World News": "Diplomats, Global Organizations, and Affected Communities",
-            "Entertainment": "Media Producers, Fans, and Industry Stakeholders",
-            "Environment & Climate": "Environmentalists, Policy Makers, and Future Generations",
-            "Education": "Students, Educators, and Academic Institutions",
-            "Defense & Security": "Military Personnel, Defense Analysts, and Security Experts"
+            "Sports": "Professional Athletes, Sports Management, and Regional Fans",
+            "Politics": "Government Stakeholders, Policy Analysts, and Concerned Citizens",
+            "Technology": "Tech Innovators, Software Engineers, and Industry Competitors",
+            "Business & Economy": "Strategic Investors, Financial Analysts, and Corporate Leaders",
+            "Science & Health": "Medical Researchers, Healthcare Providers, and Public Health Officials",
+            "World News": "International Diplomats, Global Trade Agencies, and Local Communities",
+            "Entertainment": "Media Producers, Cultural Critics, and Global Audiences",
+            "Environment & Climate": "Climate Scientists, Environmental Advocates, and Urban Planners",
+            "Education": "Academic Scholars, Educational Institutions, and Aspiring Students",
+            "Defense & Security": "Defense Strategists, National Security Experts, and Personnel"
         }
-        who_is_affected = affected_groups.get(category, "General Public, Analysts, and Industry Observers")
+        who_is_affected = affected_groups.get(category, "Key Industry Stakeholders, Analysts, and Observers")
         
-        # Dynamic why it matters based on category type
-        if category in ["Business & Economy", "Technology", "AI & Machine Learning"]:
-            why_it_matters = f"The development of '{title[:60]}...' signals a major shift in {category} that could redefine current industry standards."
-        elif category == "Sports":
-            why_it_matters = f"This update on '{title[:60]}...' is critical for tournament standings and team strategic planning."
-        elif category == "Politics":
-            why_it_matters = f"The implications of '{title[:60]}...' are being closely watched by legislative bodies and international observers."
-        elif category == "Science & Health":
-            why_it_matters = f"This discovery concerning '{title[:60]}...' significantly advances our understanding of {category} and its future applications."
-        elif category == "Environment & Climate":
-            why_it_matters = f"The findings in '{title[:60]}...' highlight urgent environmental shifts and the necessity for sustainable policy changes."
-        else:
-             why_it_matters = f"This update regarding '{title[:60]}...' provides essential context for ongoing developments within the {category} sector."
+        # Dynamic why it matters based on category type with more variety
+        variants = [
+            f"The shift in '{title[:50]}...' signifies a major transition in the {category} landscape, potentially rewriting current standards.",
+            f"Strategic developments surrounding '{title[:50]}...' are likely to trigger ripple effects across the {category} sector for months.",
+            f"This update on '{title[:50]}...' provides critical insights for stakeholders monitoring long-term {category} trends.",
+            f"Analyzed data on '{title[:50]}...' indicates a move towards more integrated and resilient {category} frameworks.",
+            f"Observations from '{title[:50]}...' suggest upcoming structural adjustments within the broader {category} ecosystem."
+        ]
+        import random
+        why_it_matters = variants[hash(title) % len(variants)]
 
         return {
             "summary_bullets": [
-                f"Core development: {title[:80]}...",
-                f"This update highlights a pivotal moment for {category} stakeholders.",
-                "Observers are noting significant implications for future planning and policy.",
-                f"Potential for extensive ripple effects across the {category} landscape.",
-                "Long-term structural changes are anticipated as a result of this development."
+                f"Breakthrough update: {title[:85]}...",
+                f"Strategic pivot identified within the {category} domain.",
+                "Market observers are closely tracking secondary implications.",
+                f"Potential for infrastructure-level changes in {category} workflows.",
+                "Confidence in the stability of this trend remains high among analysts."
             ],
             "category": category,
-            "impact_score": 8,
-            "impact_tags": [category, "Analytical Insight"],
+            "impact_score": 7 + (hash(title) % 3),
+            "impact_tags": [category, "Intelligence Node"],
             "bias_rating": "Neutral",
             "why_it_matters": why_it_matters,
             "who_is_affected": who_is_affected,
-            "short_term_impact": f"Immediate tactical adjustments and heightened awareness in {category}.",
-            "long_term_impact": f"Strategic re-alignment and fundamental shifts within the {category} ecosystem.",
+            "short_term_impact": f"Interim adjustments and heightened monitoring in {category} networks.",
+            "long_term_impact": f"Sustainable evolution and policy shifts within {category} standards.",
             "sentiment": "Neutral"
         }
 
@@ -589,7 +586,7 @@ IMPORTANT: Output ONLY valid JSON.
                 }
         else:
             client = await self._get_async_client("groq", 0)
-            model = "llama-3.3-70b-versatile"
+            model = "llama-3.1-70b-versatile"
 
         prompt = f"""
         Act as a Geopolitical Strategist AI.

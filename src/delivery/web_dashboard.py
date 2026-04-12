@@ -58,7 +58,7 @@ LANGUAGE_TO_STATES = {
 }
 
 router = APIRouter()
-templates = Jinja2Templates(directory="web/templates")
+# templates = Jinja2Templates(directory="web/templates") # REMOVED: Backend is pure API now
 
 from fastapi.responses import RedirectResponse
 @router.get("/admin", include_in_schema=False)
@@ -158,6 +158,12 @@ def normalize_article_data(data: dict):
     bullets_text = "\n".join([f"• {b}" for b in data.get(bullets_key, [])])
     data["content"] = f"### {data.get('title', 'Intelligence report')}\n\n**Summary:**\n{bullets_text}\n\n**Why It Matters:**\n{data.get(why_key, '')}\n\n**Who is Affected:**\n{data.get(who_key, '')}\n\n**Extra Context:**\n{data.get('extra_stuff', '')}\n\n**What Happens Next:**\n{data.get('what_happens_next', '')}\n\n---\n*Source: {data.get('official_url') or data.get('url') or 'Global Intel'}*"
     
+    # 4. Decoupled Architecture Image Patch
+    # If the image is locally generated (like a fallacy ad or user profile),
+    # we must ensure the decoupled frontend knows it lives on the backend port.
+    if data.get("image_url") and str(data["image_url"]).startswith("/static/"):
+        data["image_url"] = f"http://127.0.0.1:8000{data['image_url']}"
+        
     return data
 
 STUDENT_NEWS_CATEGORIES = [
@@ -306,20 +312,7 @@ def normalize_country(c):
     return name, list(set(keys)), lang
 
 
-@router.get("/")
-async def landing_page(request: Request):
-    firebase_config = {
-        "apiKey": settings.FIREBASE_API_KEY,
-        "authDomain": settings.FIREBASE_AUTH_DOMAIN,
-        "projectId": settings.FIREBASE_PROJECT_ID,
-        "storageBucket": settings.FIREBASE_STORAGE_BUCKET,
-        "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
-        "appId": settings.FIREBASE_APP_ID
-    }
-    return templates.TemplateResponse(request=request, name="login.html", context={
-        "firebase_config": firebase_config,
-        "ui": get_ui_translations('english') # Initial load is English, changes after login
-    })
+# REMOVED: Root redirect/landing page (Moved to Frontend Server)
 
 # =============================================================================
 # API v2: BOOTSTRAP — True Decoupled Frontend Entry Point
@@ -428,7 +421,20 @@ async def api_bootstrap(
             if country_stories:
                 digest_data["top_stories"] = country_stories
 
-        # Firebase config
+        # Translation: If lang is not English, translate the digest content using the cache-aware bulk method
+        if lang and lang.lower() != 'english':
+            try:
+                logger.info(f"API Bootstrap: Translating content to {lang}")
+                node_data = {
+                    "stories": digest_data.get("top_stories", []) + 
+                               digest_data.get("brief", []) + 
+                               digest_data.get("trending_news", []) +
+                               digest_data.get("breaking_news", [])
+                }
+                await translator.translate_node_bulk(node_data, lang)
+            except Exception as e:
+                logger.error(f"API Bootstrap translation failed: {e}")
+
         firebase_config = {
             "apiKey": settings.FIREBASE_API_KEY,
             "authDomain": settings.FIREBASE_AUTH_DOMAIN,
@@ -462,514 +468,10 @@ async def api_bootstrap(
         return {"status": "error", "message": str(e)}
 
 
-@router.get("/dashboard")
-async def dashboard(request: Request, category: str = None, country: str = None, lang: str = 'english', db: Session = Depends(get_db)):
-    """Render the main intelligence portal"""
-    try:
-        # 0. Context & Initialization
-        blueprint = None
-        is_special_node = bool(category or country)
-        
-        # 1. Blueprint Fetching
-        try:
-            if not is_special_node:
-                admin_api_url = os.getenv("ADMIN_API_URL", "http://localhost:5000")
-                resp = requests.get(f"{admin_api_url}/api/blueprints/active", timeout=2)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    blueprint = data.get("structure")
-                    logger.info(f"Blueprint Applied: {len(blueprint) if blueprint else 0} custom layout blocks")
-                else:
-                    blueprint = None
-            else:
-                logger.debug(f"Special node {category or country} active. Standard layout preferred.")
-        except Exception as e:
-            logger.debug(f"Blueprint fetch failed: {e}")
+# REMOVED: /dashboard HTML route (Moved to Frontend Server)
+# The data is now served exclusively through /api/v2/bootstrap below.
 
-        # 2. Layout Styles processing
-        if blueprint:
-            for block in blueprint:
-                if "styles" in block:
-                    style_str = "; ".join([f"{k}: {v}" for k, v in block["styles"].items()])
-                    block["style_attr"] = style_str
-
-        # 3. Get latest published digest
-        latest_digest = db.query(DailyDigest).filter(DailyDigest.is_published == True).order_by(DailyDigest.date.desc()).first()
-        if not latest_digest:
-            latest_digest = db.query(DailyDigest).order_by(DailyDigest.date.desc()).first()
-        
-        # 3.A AUTO-REPAIR: If news exists but no digest, generate one immediately
-        from src.database.models import VerifiedNews
-        if not latest_digest and db.query(VerifiedNews).count() > 0:
-            logger.info("Auto-Repair: Verified news found but no digest. Generating now...")
-            from src.digest.generator import DigestGenerator
-            generator = DigestGenerator()
-            # We await this synchronously to ensure the user gets a working page on the first hit
-            await generator.create_daily_digest(db)
-            latest_digest = db.query(DailyDigest).filter(DailyDigest.is_published == True).order_by(DailyDigest.date.desc()).first()
-
-        # 4. Diagnostics & Status
-        raw_count = db.query(RawNews).count()
-        verified_count = db.query(VerifiedNews).count()
-        
-        all_ads = db.query(Advertisement).filter(
-            or_(Advertisement.target_platform == "main", Advertisement.target_platform == "both")
-        ).order_by(Advertisement.created_at.desc()).limit(30).all()
-
-        # Final fallback: if main ads are empty, try fetching anything
-        if not all_ads:
-            all_ads = db.query(Advertisement).order_by(Advertisement.created_at.desc()).limit(10).all()
-
-        # Ensure position field exists (fallback for old records)
-        for ad in all_ads:
-            if not hasattr(ad, 'position') or not ad.position:
-                ad.position = 'both'
-        
-        left_ads = [a for a in all_ads if a.position in ["left", "both"]]
-        right_ads = [a for a in all_ads if a.position in ["right", "both"]]
-        mobile_ads = [a for a in all_ads if a.position in ["mobile", "both"]]
-
-        papers = db.query(Newspaper).order_by(Newspaper.name.asc()).all()
-        categories = db.query(VerifiedNews.category).distinct().all()
-        categories = [c[0] for c in categories if c[0]]
-        
-        system_status = "Syncing"
-        if not settings.NEWS_API_KEY:
-            system_status = "Configuration Alert: API Keys Missing on Server"
-        elif raw_count == 0:
-            system_status = "Collecting: Scanning Global News Sources..."
-        elif verified_count == 0:
-            system_status = "Analyzing: AI is verifying collected intelligence..."
-        elif not latest_digest:
-            system_status = "Promoting: Finalizing intelligence dashboard..."
-
-        # 5. Core Digest Data
-        digest_data = copy.deepcopy(latest_digest.content_json) if latest_digest else {
-            "top_stories": [], "breaking_news": [], "trending_news": [], "brief": [],
-            "is_system_initializing": True,
-            "is_empty_regional": True,
-            "system_status_msg": system_status
-        }
-        
-        # 5.B Freshness Filter (Relaxed to 72 Hours for better coverage)
-        now_utc = datetime.utcnow()
-        freshness_limit_hours = 72
-        cutoff_time = now_utc - timedelta(hours=freshness_limit_hours)
-        
-        def is_fresh(item):
-            # Try to parse published_at if it exists
-            pub = item.get("published_at")
-            if pub and isinstance(pub, str):
-                try:
-                    p_time = datetime.fromisoformat(pub.replace("Z", "+00:00"))
-                    return p_time > cutoff_time
-                except: return True
-            return True
-
-        if digest_data:
-            for section in ["top_stories", "breaking_news", "trending_news", "brief"]:
-                if section in digest_data and digest_data[section]:
-                    digest_data[section] = [s for s in digest_data[section] if is_fresh(s)]
-
-        # 5.C DEDUPLICATION: Ensure no overlaps between major sections for a cleaner look
-        seen_story_ids = set()
-        if digest_data.get("top_stories"):
-            for s in digest_data["top_stories"]:
-                if s.get("id"): seen_story_ids.add(s["id"])
-        
-        if digest_data.get("breaking_news"):
-            # Deduplicate breaking against top_stories
-            digest_data["breaking_news"] = [
-                s for s in digest_data["breaking_news"]
-                if s.get("id") not in seen_story_ids
-            ]
-            for s in digest_data["breaking_news"]:
-                if s.get("id"): seen_story_ids.add(s["id"])
-
-        if digest_data.get("trending_news"):
-            # Strictly dedupe trending against top_stories AND breaking_news
-            digest_data["trending_news"] = [
-                s for s in digest_data["trending_news"] 
-                if s.get("id") not in seen_story_ids
-            ]
-
-        # Handle case where content_json is stringified
-        if isinstance(digest_data, str):
-            import json
-            digest_data = json.loads(digest_data)
-
-        # 6. Regional & Category Logic (Enhanced)
-        selected_country_name = None
-        country_match_keys = []
-        trending_title = "Global Intelligence Feed"
-
-        if category and digest_data:
-            # Perfection: Robust category matching with synonyms
-            cat_lower = category.lower()
-            synonyms = {
-                "technology": "tech",
-                "finances": "finance",
-                "economy": "finance",
-                "geopolitics": "politics"
-            }
-            cat_target = synonyms.get(cat_lower, cat_lower)
-
-            for section in ["top_stories", "breaking_news", "trending_news"]:
-                if section in digest_data:
-                    digest_data[section] = [
-                        s for s in digest_data[section] 
-                        if (s.get("category") or "").lower() == cat_target or (s.get("category") or "").lower() == cat_lower
-                    ]
-            trending_title = f"{category.capitalize()} Trending"
-
-        elif country and digest_data:
-            target_name, match_keys, native_lang = normalize_country(country)
-            
-            # AUTO-REDIRECT TO NATIVE LANGUAGE if lang is missing or english
-            if native_lang != 'english' and (not lang or lang.lower() == 'english'):
-                logger.info(f"Auto-switching node {target_name} to native language: {native_lang}")
-                return RedirectResponse(url=f"/dashboard?country={country}&lang={native_lang}")
-
-            selected_country_name = target_name
-            country_match_keys = match_keys
-            
-            countries_data = digest_data.get("countries", {})
-            country_stories = []
-            
-            # Match strictly
-            for k, v in countries_data.items():
-                if k.lower() in match_keys:
-                    country_stories = v
-                    break
-            
-            # Fallback for stories tagged specifically but not in node bucket
-            if not country_stories and "top_stories" in digest_data:
-                country_stories = [s for s in digest_data["top_stories"] if s.get("country") in match_keys]
-
-            if country_stories:
-                normalized_stories = []
-                for s in country_stories:
-                    normalized_stories.append({
-                        "id": s.get("id"),
-                        "title": s.get("title"),
-                        "url": s.get("url"),
-                        "image_url": s.get("image_url"),
-                        "source_name": s.get("source_name"),
-                        "bullets": s.get("bullets") or [s.get("why", "")],
-                        "affected": s.get("affected", ""),
-                        "why": s.get("why", ""),
-                        "bias": s.get("bias", "Neutral"),
-                        "tags": s.get("tags", []),
-                        "category": s.get("category"),
-                        "country": s.get("country"),
-                        "time_ago": s.get("time_ago", "Just Now")
-                    })
-                digest_data["top_stories"] = normalized_stories
-                trending_title = f"Trending in {target_name}"
-            else:
-                digest_data["is_empty_regional"] = True
-                # Keep global as fallback but mark them
-                for section in ["top_stories", "breaking_news", "trending_news"]:
-                    if section in digest_data:
-                        for s in digest_data[section]:
-                            s["is_global_fallback"] = True
-                trending_title = f"{target_name} Node: Regional Intel Pending"
-
-            # Filter other sections strictly if regional exists
-            if not digest_data.get("is_empty_regional"):
-                for section in ["breaking_news", "brief", "trending_news"]:
-                    if section in digest_data:
-                        digest_data[section] = [
-                            item for item in digest_data[section]
-                            if (item.get("country") in match_keys) or (item.get("country_name") in match_keys)
-                        ]
-            
-            # Universal Node Translation (any country, any language)
-            if selected_country_name and lang and lang.lower() != 'english':
-                try:
-                    logger.info(f"Dashboard Service: Optimizing regional translation to {lang} via cache")
-                    # Use the cache-aware bulk translation method
-                    node_data = {
-                        "stories": digest_data.get("top_stories", []) + 
-                                   digest_data.get("brief", []) + 
-                                   digest_data.get("trending_news", []) +
-                                   digest_data.get("breaking_news", []) # Added for full regional translation
-                    }
-                    await translator.translate_node_bulk(node_data, lang)
-                    logger.info(f"Dashboard Service: Regional translation cache hit/synced for {lang}")
-                except Exception as e:
-                    logger.error(f"Regional cached translation failed: {e}")
-
-
-        # 7. Category Logic
-        elif category and digest_data:
-            normalized_cat = category.lower().replace(" ", "_").strip()
-            category_map = {
-                "business": "Business & Economy", "economy": "Business & Economy", "finance": "Business & Economy",
-                "tech": "Technology", "technology": "Technology",
-                "science": "Science & Health", "health": "Science & Health",
-                "world": "World News", "india": "India / Local News",
-                "ai": "AI & Machine Learning", "sports": "Sports", "entertainment": "Entertainment",
-                "politics": "Politics"
-            }
-            target_key = category_map.get(normalized_cat, category.strip())
-            
-            categories_in_digest = digest_data.get("categories", {})
-            cat_stories = categories_in_digest.get(target_key)
-            if not cat_stories:
-                cat_stories = categories_in_digest.get(normalized_cat)
-            
-            # STABILITY: If digest has the key but it's empty, or key is missing, fetch from DB
-            if not cat_stories or len(cat_stories) == 0:
-                logger.info(f"Category '{category}' empty in digest. Falling back to robust DB search...")
-                search_term = target_key.lower()
-                matched_db_cat = None
-                for cat_name in categories:
-                    if search_term in cat_name.lower() or cat_name.lower() in search_term:
-                        matched_db_cat = cat_name
-                        break
-                
-                if matched_db_cat:
-                    db_stories = db.query(VerifiedNews).filter(
-                        VerifiedNews.category == matched_db_cat
-                    ).order_by(VerifiedNews.id.desc()).limit(20).all()
-                    
-                    if db_stories:
-                        cat_stories = []
-                        for s in db_stories:
-                            cat_stories.append({
-                                "id": s.id, "title": s.title, "url": s.url or f"/article/{s.id}",
-                                "image_url": s.image_url or (s.raw_news.url_to_image if s.raw_news else None) or get_fallback_image(s.title),
-                                "source_name": s.source_name or (s.raw_news.source_name if s.raw_news else "Verified Source"),
-                                "bullets": s.summary_bullets or [],
-                                "time_ago": "Recently"
-                            })
-                        logger.info(f"Fallback success: Found {len(cat_stories)} stories for {matched_db_cat}")
-            
-            # --- DATABASE FALLBACK ---
-            if not cat_stories:
-                logger.info(f"Category '{category}' not in digest. Fetching from DB...")
-                db_stories = db.query(VerifiedNews).filter(
-                    VerifiedNews.category.ilike(f"%{category}%")
-                ).order_by(VerifiedNews.id.desc()).limit(20).all()
-                if db_stories:
-                    cat_stories = []
-                    for s in db_stories:
-                        cat_stories.append({
-                            "id": s.id, "title": s.title, "url": f"/article/{s.id}",
-                            "image_url": getattr(s, 'url_to_image', None) or (s.analysis.get('image_url') if s.analysis else None),
-                            "source_name": getattr(s, 'source_name', 'Global News'),
-                            "bullets": s.summary_bullets or [],
-                            "why": s.why_it_matters, "affected": getattr(s, 'who_is_affected', ''),
-                            "category": s.category, "country": s.country, "time_ago": "Recently"
-                        })
-            
-            if cat_stories:
-                # IMPORTANT: Overwrite top_stories with the full category list
-                digest_data["top_stories"] = cat_stories
-            else:
-                # Final fallback: filter existing top_stories
-                all_stories = digest_data.get("top_stories", [])
-                digest_data["top_stories"] = [s for s in all_stories if (s.get("category") or "").lower() == category.lower()]
-
-        # 8. Global Home View filtering (Removed restrictive non_english filter to show all news)
-        if digest_data:
-            pass
-
-        # 9. Fallback images and GLOBAL NORMALIZATION
-        if digest_data:
-            for section in ["top_stories", "breaking_news", "trending_news", "brief"]:
-                if section in digest_data and isinstance(digest_data[section], list):
-                    for item in digest_data[section]:
-                        # 9.A Normalize data (Heals character splitting and JSON leakage)
-                        normalize_article_data(item)
-                        
-                        # 9.B Fallback images
-                        if not item.get("image_url"):
-                            seed = f"{item.get('title', '')}{item.get('id', '')}"
-                            item["image_url"] = get_fallback_image(seed)
-
-        # 9.C GLOBAL TRANSLATION (Home Page)
-        if not (category or country) and lang and lang.lower() != 'english' and digest_data:
-            try:
-                logger.info(f"Dashboard Service: Optimizing global feed translation to {lang} via cache")
-                node_data = {
-                    "stories": digest_data.get("top_stories", []) + 
-                               digest_data.get("breaking_news", []) + 
-                               digest_data.get("brief", []) + 
-                               digest_data.get("trending_news", [])
-                }
-                await translator.translate_node_bulk(node_data, lang)
-                logger.info(f"Dashboard Service: Global feed cache hit/synced for {lang}")
-            except Exception as e:
-                logger.error(f"Global cached translation failed: {e}")
-
-
-        firebase_config = {
-            "apiKey": settings.FIREBASE_API_KEY,
-            "authDomain": settings.FIREBASE_AUTH_DOMAIN,
-            "projectId": settings.FIREBASE_PROJECT_ID,
-            "storageBucket": settings.FIREBASE_STORAGE_BUCKET,
-            "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
-            "appId": settings.FIREBASE_APP_ID
-        }
-
-        # 10. Unique papers for dropdown and Filter Newspapers by country (Guarantee Minimum 4)
-        unique_papers = []
-        seen_countries = set()
-        for p in papers:
-            country_key = (p.country or "Global").strip().lower()
-            if country_key not in seen_countries:
-                unique_papers.append(p)
-                seen_countries.add(country_key)
-
-        if country:
-             # Normalize selected country name for newspaper matching
-             target_name, _, _ = normalize_country(country)
-             # Filter papers by country name or "Global"
-             specific_papers = [p for p in papers if p.country == target_name]
-             global_papers = [p for p in papers if p.country == "Global"]
-             
-             # If less than 4 specific papers, pad with global
-             if len(specific_papers) < 4:
-                 needed = 4 - len(specific_papers)
-                 context_papers = specific_papers + global_papers[:needed]
-             else:
-                 context_papers = specific_papers
-        else:
-             context_papers = [p for p in papers if p.country == "Global"]
-
-        # 11. SERVER-SIDE TRANSLATION — ONE sequential Groq call per section when lang is set
-        # Define categories and remove translation restriction.
-        if lang and lang.lower() != 'english':
-            try:
-                logger.info(f"Server-side translation to {lang} starting")
-                # Only translate top_stories (the article cards) with full data
-                top = digest_data.get("top_stories", []) # Remove limit
-                if top:
-                    stories_input = [
-                        {"title": s.get("title", ""), "bullets": s.get("bullets", [])[:5],
-                         "why": s.get("why", ""), "affected": s.get("affected", "")}
-                        for s in top
-                    ]
-                    res = await asyncio.wait_for(_do_translate(stories_input, lang, ""), timeout=45.0)
-                    for i, s in enumerate(top):
-                        t = res.get("translated_stories", [])[i] if i < len(res.get("translated_stories", [])) else {}
-                        if t.get("title"): s["title"] = t["title"]
-                        if t.get("bullets"): s["bullets"] = t["bullets"]
-                        if t.get("why"):     s["why"]     = t["why"]
-                        if t.get("affected"): s["affected"] = t["affected"]
-
-                # Translate brief titles (titles only, keep it small)
-                brief = digest_data.get("brief", []) # Remove limit
-                if brief:
-                    brief_input = [{"title": s.get("title", "")} for s in brief]
-                    brief_res = await asyncio.wait_for(_do_translate(brief_input, lang, ""), timeout=25.0)
-                    for i, s in enumerate(brief):
-                        t = brief_res.get("translated_stories", [])[i] if i < len(brief_res.get("translated_stories", [])) else {}
-                        if t.get("title"): s["title"] = t["title"]
-
-                # Translate trending titles
-                trending = digest_data.get("trending_news", []) # Remove limit
-                if trending:
-                    tr_input = [{"title": s.get("title", "")} for s in trending]
-                    tr_res = await asyncio.wait_for(_do_translate(tr_input, lang, trending_title), timeout=25.0)
-                    for i, s in enumerate(trending):
-                        t = tr_res.get("translated_stories", [])[i] if i < len(tr_res.get("translated_stories", [])) else {}
-                        if t.get("title"): s["title"] = t["title"]
-                    if tr_res.get("node_title"): trending_title = tr_res["node_title"]
-
-                # --- FIX: Translate Breaking News (Missing previously) ---
-                breaking = digest_data.get("breaking_news", [])
-                if breaking:
-                    break_input = [{"title": s.get("title", ""), "summary": s.get("summary", "")[:200]} for s in breaking]
-                    break_res = await asyncio.wait_for(_do_translate(break_input, lang, "Breaking"), timeout=25.0)
-                    for i, s in enumerate(breaking):
-                        t = break_res.get("translated_stories", [])[i] if i < len(break_res.get("translated_stories", [])) else {}
-                        if t.get("title"): s["title"] = t["title"] or s.get("title")
-                        if t.get("headline"): s["headline"] = t["headline"]
-                        if t.get("summary"): s["summary"] = t["summary"]
-
-                logger.info(f"Server-side translation to {lang} complete")
-            except Exception as e:
-                logger.error(f"Server-side translation failed: {e}")
-
-
-        context = {
-            "request": request,
-            "digest": digest_data,
-            "date": latest_digest.date.strftime("%Y-%m-%d") if latest_digest else "System Initializing",
-            "firebase_config": firebase_config,
-            "left_ads": left_ads,
-            "right_ads": right_ads,
-            "mobile_ads": mobile_ads,
-            "papers": unique_papers, # Use unique countries for the Global Nodes menu
-            "all_papers": papers, # Keep all papers for the newspapers section
-            "categories": categories, 
-            "vapid_public_key": settings.VAPID_PUBLIC_KEY,
-            "selected_category": category,
-            "selected_country": country,
-            "trending_title": trending_title,
-            "selected_country_name": selected_country_name,
-            "country_match_keys": country_match_keys,
-            "blueprint": blueprint,
-            "admin_api_url": os.getenv("ADMIN_API_URL", "http://localhost:5000"),
-            "selected_lang": lang,
-            "ui": get_ui_translations(lang),
-        }
-
-        return templates.TemplateResponse(request=request, name="dashboard.html", context=context)
-
-    except Exception as e:
-        import traceback
-        logger.error(f"DASHBOARD CRASH: {str(e)}")
-        logger.error(traceback.format_exc())
-        return templates.TemplateResponse(request=request, name="error.html", context={"message": f"Intelligence Node Error: {str(e)}", "stack": traceback.format_exc()}, status_code=500)
-
-@router.get("/saved")
-async def saved_page(request: Request):
-    firebase_config = {
-        "apiKey": settings.FIREBASE_API_KEY,
-        "authDomain": settings.FIREBASE_AUTH_DOMAIN,
-        "projectId": settings.FIREBASE_PROJECT_ID,
-        "storageBucket": settings.FIREBASE_STORAGE_BUCKET,
-        "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
-        "appId": settings.FIREBASE_APP_ID
-    }
-    return templates.TemplateResponse(request=request, name="saved.html", context={
-        "firebase_config": firebase_config,
-        "ui": get_ui_translations('english') # Default for now, can be updated to track lang
-    })
-
-@router.get("/history")
-async def history(request: Request):
-    return templates.TemplateResponse(request=request, name="history.html", context={
-        "firebase_config": FIREBASE_CLIENT_CONFIG,
-        "ui": get_ui_translations('english')
-    })
-
-@router.get("/newspaper")
-async def newspaper(request: Request, db: Session = Depends(get_db)):
-    # Simply reuse the dashboard logic or redirect. For now, we redirect to fix the 500 error 
-    # and ensure the user sees their news. Or better, we render dashboard.html with a 'newspaper' flag.
-    # Return to dashboard as a temporary fix if template is missing, or we will create newspaper.html.
-    return await dashboard(request, db=db)
-
-@router.get("/business-intelligence")
-async def business_intelligence(request: Request, db: Session = Depends(get_db)):
-    # This route is restricted
-    latest_digest = db.query(DailyDigest).filter(DailyDigest.is_published == True).order_by(DailyDigest.date.desc()).first()
-    
-    premium_intel = []
-    if latest_digest and "premium_intel" in latest_digest.content_json:
-        premium_intel = latest_digest.content_json["premium_intel"]
-        
-    return templates.TemplateResponse(request=request, name="business_intel.html", context={
-        "firebase_config": FIREBASE_CLIENT_CONFIG,
-        "premium_intel": premium_intel,
-        "restricted_email": "chaparapuashokreddy666@gmail.com",
-        "ui": get_ui_translations('english')
-    })
+# REMOVED: Miscellaneous HTML routes (Moved to Frontend Server)
 
 @router.get("/api/article/{article_id}")
 async def get_article_detail(article_id: str, lang: str = "english", url: str = None, db: Session = Depends(get_db)):
@@ -1400,17 +902,7 @@ async def subscribe_category(payload: SubscribeRequest, db: Session = Depends(ge
     
     return {"status": "already_subscribed", "message": "Already on the list!"}
 
-@router.get("/mock-test")
-async def mock_test_page(request: Request):
-    firebase_config = {
-        "apiKey": settings.FIREBASE_API_KEY,
-        "authDomain": settings.FIREBASE_AUTH_DOMAIN,
-        "projectId": settings.FIREBASE_PROJECT_ID,
-        "storageBucket": settings.FIREBASE_STORAGE_BUCKET,
-        "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
-        "appId": settings.FIREBASE_APP_ID
-    }
-    return templates.TemplateResponse(request=request, name="mock_test.html", context={"firebase_config": firebase_config})
+# REMOVED: Mock Test HTML route (Moved to Frontend Server)
 
 @router.post("/api/sync-intelligence")
 async def force_sync_intelligence(background_tasks: BackgroundTasks):
@@ -1829,25 +1321,7 @@ async def save_note(payload: NoteRequest):
     logger.info(f"User Note: {payload.text} from {payload.url}")
     return {"status": "success", "message": "Note recorded"}
 
-@router.get("/universe")
-async def universe_page(request: Request, lang: str = 'english'):
-    firebase_config = {
-        "apiKey": settings.FIREBASE_API_KEY,
-        "authDomain": settings.FIREBASE_AUTH_DOMAIN,
-        "projectId": settings.FIREBASE_PROJECT_ID,
-        "storageBucket": settings.FIREBASE_STORAGE_BUCKET,
-        "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
-        "appId": settings.FIREBASE_APP_ID
-    }
-    return templates.TemplateResponse(
-        request=request, 
-        name="universe.html", 
-        context={
-            "firebase_config": firebase_config,
-            "ui": get_ui_translations(lang),
-            "selected_lang": lang
-        }
-    )
+# REMOVED: /universe UI route (Moved to Frontend Server)
 
 class UniverseRequest(BaseModel):
     country: str
@@ -2218,84 +1692,8 @@ async def delete_article(article_id: int, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- STUDENT NEWS PORTAL ---
-
-@router.get("/student-news")
-async def student_news_page(request: Request, category: str = None, profile: str = None, country: str = "India", lang: str = None, db: Session = Depends(get_db)):
-    if not category or category == "All Updates":
-        category = "All Updates"
-        
-    target_name, _, _ = normalize_country(country)
-    country_key = target_name.lower()
-    
-    # Auto-detect language based on country search (unless explicitly set)
-    if not lang or lang.lower() == 'english':
-        country_lang_map = {
-            "india": "Hindi", "china": "Chinese", "japan": "Japanese", 
-            "france": "French", "germany": "German", "spain": "Spanish",
-            "russia": "Russian", "brazil": "Portuguese", "portugal": "Portuguese",
-            "italy": "Italian", "korea": "Korean", "uae": "Arabic", "saudi arabia": "Arabic"
-        }
-        # Only auto-translate for searched countries, otherwise stick to English or user choice
-        if country_key in country_lang_map and country.lower() != 'global':
-            lang = country_lang_map[country_key]
-            logger.info(f"Auto-detect student lang: {lang} for {country}")
-        else:
-            lang = lang or 'english'
-
-    # Process or get from cache
-    _update_student_cache_if_needed(db, force=False, country=country)
-    
-    # Filter by category if requested
-    cache = _student_news_caches.get(country_key, {})
-    articles = cache.get("articles", [])
-    if category and category not in ("All", "All Updates"):
-        articles = [a for a in articles if a["category"] == category]
-        
-    if profile:
-        articles = [a for a in articles if profile in a.get("profiles", [])]
-        
-    trends = cache.get("trends", {})
-    
-    # 4. Fetch Ads for Student Portal
-    ad_query = db.query(Advertisement).filter(
-        or_(Advertisement.target_platform == "student", Advertisement.target_platform == "both")
-    ).order_by(Advertisement.created_at.desc())
-    all_ads = ad_query.limit(10).all()
-    
-    # Position filtering
-    left_ads = [a for a in all_ads if a.position in ["left", "both"]]
-    right_ads = [a for a in all_ads if a.position in ["right", "both"]]
-    mobile_ads = [a for a in all_ads if a.position in ["mobile", "both"]]
-
-    # Translate if non-english
-    if lang and lang.lower() != 'english' and articles:
-        try:
-            # Only translate first 10 for speed
-            trans_input = [{"title": a["title"], "summary": a["summary"]} for a in articles[:10]]
-            res = await _do_translate(trans_input, lang, "")
-            for i, a in enumerate(articles[:10]):
-                t = res.get("translated_stories", [])[i] if i < len(res.get("translated_stories", [])) else {}
-                if t.get("title"): a["title"] = t["title"]
-                if t.get("summary"): a["summary"] = t["summary"]
-        except Exception as e:
-            logger.error(f"Student news translation failed: {e}")
-
-    return templates.TemplateResponse(request=request, name="student_news.html", context={
-        "articles": articles[:10], # Only pass first 10 for pagination
-        "trends": trends,
-        "categories": ["All Updates", "Scholarships & Internships", "Exams & Results", "Admissions & Courses", "Career & Jobs"],
-        "profiles": ["High School", "Undergraduate", "Postgraduate", "PhD / Researcher", "Competitive Exam Aspirant"],
-        "current_category": category,
-        "current_profile": profile,
-        "current_country": country,
-        "firebase_config": FIREBASE_CLIENT_CONFIG,
-        "selected_lang": lang,
-        "left_ads": left_ads,
-        "right_ads": right_ads,
-        "mobile_ads": mobile_ads,
-        "active_campaign": _get_active_campaign("student")
-    })
+# --- STUDENT NEWS PORTAL (API-ONLY) ---
+# REMOVED: /student-news UI route (Moved to Frontend Server)
 
 def _get_active_campaign(platform="main"):
     """Helper to fetch active blueprint campaign targeting specific platform."""
@@ -2593,45 +1991,7 @@ def _update_student_cache_if_needed(db: Session, force: bool = False, country: s
 
 # --- PERSONAL AI NEWS AGENT ---
 
-@router.get("/personal-agent")
-async def personal_agent_page(request: Request, lang: str = 'english'):
-    db = SessionLocal()
-    try:
-        categories_raw = db.query(VerifiedNews.category).distinct().all()
-        import json as _json
-        def _extract_category(raw):
-            if not raw:
-                return None
-            s = str(raw).strip()
-            # If it looks like a JSON dict, parse it
-            if s.startswith('{'):
-                try:
-                    obj = _json.loads(s)
-                    # Prefer 'english' or 'en' keys, else first value
-                    return obj.get('English') or obj.get('english') or obj.get('en') or next(iter(obj.values()), None)
-                except Exception:
-                    pass
-            return s
-        
-        categories = [_extract_category(c[0]) for c in categories_raw if c[0]]
-        categories = [c for c in categories if c]  # remove None/empty
-        categories = sorted(set(categories))  # deduplicate
-
-        if not categories or len(categories) < 5:
-            categories = [
-                "Artificial Intelligence", "Blockchain & Crypto", "Global Economy", 
-                "Quantum Computing", "Space Exploration", "Cybersecurity", 
-                "Electric Vehicles", "Biotechnology", "Renewable Energy", "Robotics"
-            ]
-        
-        return templates.TemplateResponse(request=request, name="personal_agent.html", context={
-            "firebase_config": FIREBASE_CLIENT_CONFIG,
-            "available_interests": sorted(list(set(categories)))[:12],
-            "selected_lang": lang,
-            "ui": get_ui_translations(lang)
-        })
-    finally:
-        db.close()
+# REMOVED: /personal-agent UI route (Moved to Frontend Server)
 
 @router.get("/api/search-news")
 @router.get("/api/get-personal-news")
@@ -2702,13 +2062,7 @@ async def api_get_personal_news(interests: str = None, q: str = None, lang: str 
         logger.error(f"Personal news fetch failed: {e}")
         return {"status": "error", "message": "Neural search node offline."}
 
-@router.get("/crystal-ball")
-async def crystal_ball_page(request: Request, lang: str = 'english'):
-    """Render the AI Crystal Ball predictive page."""
-    return templates.TemplateResponse(request=request, name="crystal_ball.html", context={
-        "selected_lang": lang,
-        "ui": get_ui_translations(lang)
-    })
+# REMOVED: /crystal-ball UI route (Moved to Frontend Server)
 
 @router.get("/api/geopolitics-prediction")
 async def api_get_prediction_geo(db: Session = Depends(get_db)):

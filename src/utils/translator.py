@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "llama-3.1-70b-versatile"
 
 class NewsTranslator:
     def __init__(self):

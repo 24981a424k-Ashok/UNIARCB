@@ -193,21 +193,58 @@ class DigestGenerator:
             if len(category_buckets[cat]) < 4:
                 category_buckets[cat].append(n)
         
-        # Flattened balanced pool
+        # Flattened balanced pool with Diversity Filter (Diversity Cap: Max 25% for any category)
         balanced_pool = []
-        for cat_list in category_buckets.values():
-            balanced_pool.extend(cat_list)
-            
-        # Sort by impact score again to keep quality high
-        balanced_pool = sorted(balanced_pool, key=calculate_rank_score, reverse=True)
-        top_10_pool = balanced_pool[:15] # Take top 15 for a rich lead section
+        limit_per_category = 3 # Ensure wide variety initially
         
-        # Backfill with original sorted_news if too dry
+        # Priority sort: Get diverse set from all buckets first
+        for cat_list in sorted(category_buckets.values(), key=len, reverse=True):
+            balanced_pool.extend(cat_list[:limit_per_category])
+            
+        # Sports Cap: If sports still dominates too much of the pool, shuffle it down
+        sports_count = sum(1 for n in balanced_pool if n.category == "Sports")
+        if sports_count > (len(balanced_pool) * 0.25):
+             logger.info(f"Digest Generator: Sports Cap triggered ({sports_count} items). Rebalancing...")
+             # Keep only up to 25% of balanced_pool as sports, move rest back to pool
+             non_sports = [n for n in balanced_pool if n.category != "Sports"]
+             sports = [n for n in balanced_pool if n.category == "Sports"]
+             max_sports = int(len(balanced_pool) * 0.25)
+             balanced_pool = non_sports + sports[:max_sports]
+        
+        # Final Sort for quality
+        balanced_pool = sorted(balanced_pool, key=calculate_rank_score, reverse=True)
+        
+        # DIVERSITY RE-ORDER: Ensure top 5 are not dominated by Sports
+        final_top_stories = []
+        sports_count_top = 0
+        for n in balanced_pool:
+            if n.category == "Sports":
+                if sports_count_top < 2: # Max 2 Sports in the very top section
+                    final_top_stories.append(n)
+                    sports_count_top += 1
+                else:
+                    # Move other sports to the end of the pool
+                    continue
+            else:
+                final_top_stories.append(n)
+        
+        # Add back the skipped sports at the end
+        final_top_stories.extend([n for n in balanced_pool if n.category == "Sports" and n not in final_top_stories])
+        
+        top_10_pool = final_top_stories[:25] 
+        
+        # Backfill with original sorted_news if too dry, but still apply the cap
         if len(top_10_pool) < 10:
              top_10_pool = sorted_news[:10]
         
-        # Shuffle slightly for variety
-        random.shuffle(top_10_pool)
+        # Shuffle slightly for variety, but KEEP the first one if it's high impact and NOT sports
+        if top_10_pool and top_10_pool[0].category != 'Sports':
+            first = top_10_pool[0]
+            rest = top_10_pool[1:]
+            random.shuffle(rest)
+            top_10_pool = [first] + rest
+        else:
+            random.shuffle(top_10_pool)
 
         # 2. Categories
         mandatory_categories = [
@@ -292,10 +329,11 @@ class DigestGenerator:
                         # If it's not business or tech, don't add to a specific category, but still add to country
                         cat = None # Mark as not fitting a specific category for now
 
-            # Add to category
+            # Add to category with balancing (Global limit per category to avoid saturation)
             if cat and cat in categories:
-                # Ensure we don't over-fill one category at the expense of others initially
-                if len(categories[cat]) < 20:
+                # DIVERSITY FILTER: Limit "Sports" more strictly if pool is already saturated
+                limit = 15 if cat == "Sports" else 25 
+                if len(categories[cat]) < limit:
                     categories[cat].append(item_data)
             
             # Add to Global bucket if no country

@@ -14,28 +14,15 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-# The frontend templates are now hosted locally in the backend for cloud deployment
-TEMPLATES_DIR = os.path.join(BACKEND_DIR, "templates")
-STATIC_DIR    = os.path.join(BACKEND_DIR, "static")
-
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, HTMLResponse
-from starlette.responses import JSONResponse
 from loguru import logger
 
 # Silence noisy external libraries
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.CRITICAL)
-
-from src.config import settings
-from src.scheduler.task_scheduler import start_scheduler
 
 from src.delivery.web_dashboard import router as dashboard_router
 from src.delivery.user_retention import router as retention_router
@@ -53,17 +40,8 @@ from src.database.models import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting AI News Intelligence Agent (Backend)...")
-    logger.info(f"Templates Directory: {TEMPLATES_DIR}")
-    logger.info(f"Static Directory: {STATIC_DIR}")
-
-    if not settings.OPENAI_API_KEYS:
-        logger.warning("MISSING CRITICAL KEYS: OPENAI_API_KEYS.")
-    if not settings.GROQ_API_KEYS:
-        logger.warning("MISSING CRITICAL KEYS: GROQ_API_KEYS.")
-    if not os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON") and not os.path.exists("service-account.json"):
-        logger.warning("No Firebase credentials found.")
-
+    logger.info("Starting AI News Intelligence Agent (Backend API)...")
+    
     init_db()
     logger.info("Database initialized.")
 
@@ -121,6 +99,7 @@ async def lifespan(app: FastAPI):
     import threading
     threading.Thread(target=_background_startup_tasks, daemon=True).start()
 
+    from src.scheduler.task_scheduler import start_scheduler
     scheduler = start_scheduler()
     logger.info("Scheduler started.")
 
@@ -131,30 +110,20 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown()
 
 
-app = FastAPI(title="AI News Intelligence Agent - Backend", lifespan=lifespan)
+app = FastAPI(title="AI News Intelligence Agent - Backend API", lifespan=lifespan)
 
-# --- CORS: Allow the frontend to connect ---
+# --- CORS FOR ANDROID .AAB & DECOUPLED FRONTEND ---
+# Using allow_credentials=False is required by the CORS protocol when using allow_origins=["*"].
+# This is perfectly fine because Firebase handles our Authentication tokens, not server cookies.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"], 
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount static files from the frontend folder
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-# ---------------------------------------------------------------
-# IMPORTANT: Patch the template directory used by web_dashboard.py
-# This must happen BEFORE including the routers
-# ---------------------------------------------------------------
-import src.delivery.web_dashboard as _wd
-_wd.templates = Jinja2Templates(directory=TEMPLATES_DIR)
-import src.delivery.admin_portal as _ap
-_ap.templates = Jinja2Templates(directory=TEMPLATES_DIR)
-
-# Include Routers
+# Include Routers (Now only serving API and necessary Admin logic)
 app.include_router(retention_router)
 app.include_router(dashboard_router)
 app.include_router(admin_router)
@@ -182,10 +151,13 @@ async def maintenance_middleware(request: Request, call_next):
         logger.error(f"Maintenance check failed: {e}")
     return await call_next(request)
 
+# Re-enable backend static file serving specifically for user-uploaded images and generated graphics
+from fastapi.staticfiles import StaticFiles
+static_path = os.path.join(BACKEND_DIR, "static")
+if os.path.exists(static_path):
+    app.mount("/static", StaticFiles(directory=static_path), name="static")
 
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    return FileResponse(os.path.join(STATIC_DIR, "favicon.png"))
+# (Backend does not serve UI assets like favicon anymore)
 
 
 @app.get("/health")

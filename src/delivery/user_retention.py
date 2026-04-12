@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
 from src.database.models import SessionLocal, User, Folder, SavedArticle, ReadHistory, VerifiedNews, TopicTracking
 from pydantic import BaseModel
@@ -282,6 +283,10 @@ async def track_topic(payload: TrackTopicRequest, db: Session = Depends(get_db))
         db.commit()
         db.refresh(user)
         
+    # NEW: Check if phone number exists for SMS tracking
+    if not user.phone:
+        return {"status": "NEED_PHONE", "message": "Phone number required for SMS alerts."}
+        
     # Get article keywords
     article_id_clean = payload.article_id
     if isinstance(article_id_clean, str) and article_id_clean.startswith("raw-"):
@@ -311,10 +316,13 @@ async def track_topic(payload: TrackTopicRequest, db: Session = Depends(get_db))
             news_id_to_store = None
     
     # Check if already tracking this article to avoid duplicates
-    existing = db.query(TopicTracking).filter(
-        TopicTracking.user_id == user.id,
-        TopicTracking.topic_keywords.any(keywords[0]) if keywords else False
-    ).first()
+    # Cross-DB safe check for keywords in JSON array
+    existing = None
+    if keywords:
+        existing = db.query(TopicTracking).filter(
+            TopicTracking.user_id == user.id,
+            cast(TopicTracking.topic_keywords, String).contains(keywords[0])
+        ).first()
     
     if not existing:
         track = TopicTracking(
