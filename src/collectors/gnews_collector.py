@@ -134,8 +134,25 @@ class GNewsCollector:
                 except:
                     pub_dt = datetime.utcnow()
 
+                # --- DIVERSITY FILTER: CAPPING SPORTS OVER-SATURATION ---
+                title_lower = (article.get('title') or "").lower()
+                is_sports = any(k in title_lower for k in ["cricket", "ipl", "match", "tournament", "scored", "wicket", "stadium", "sports", "football", "olympic", "fifa", "premier league"])
+                
+                if is_sports:
+                    # Check how many sports articles we already saved in THIS session (last 1 hour to be safe)
+                    from datetime import timedelta
+                    sports_limit = 5
+                    saved_sports = session.query(RawNews).filter(
+                        RawNews.published_at >= datetime.utcnow() - timedelta(hours=1),
+                        (RawNews.title.like("%cricket%") | RawNews.title.like("%ipl%") | RawNews.title.like("%match%") | RawNews.title.like("%sports%"))
+                    ).count()
+                    
+                    if saved_sports >= sports_limit:
+                        # logger.info(f"GNews: Skipping sports article to maintain diversity: {article.get('title')[:30]}...")
+                        continue
+
                 raw_news = RawNews(
-                    source_id=f"gnews-{country_code}-{abs(hash(url)) % 100000}",  # Fixed: was missing source_id
+                    source_id=f"gnews-{country_code}-{abs(hash(url)) % 100000}",
                     source_name=article.get('source', {}).get('name', 'GNews'),
                     author=article.get('source', {}).get('name', None),
                     title=article.get('title'),

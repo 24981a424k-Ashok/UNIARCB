@@ -12,9 +12,9 @@ from src.config.settings import OPENAI_API_KEY, GROQ_API_KEY, TRANSLATION_KEYS, 
 
 class LLMAnalyzer:
     def __init__(self):
-        # 1. Gather unique keys from settings pools
-        self.openai_keys = list(dict.fromkeys(settings.OPENAI_API_KEYS))
-        self.groq_keys = list(dict.fromkeys(settings.GROQ_API_KEYS))
+        # 1. Gather unique non-empty keys from settings pools
+        self.openai_keys = list(dict.fromkeys([k for k in settings.OPENAI_API_KEYS if k]))
+        self.groq_keys = list(dict.fromkeys([k for k in settings.GROQ_API_KEYS if k]))
         
         if not self.openai_keys and not self.groq_keys:
             logger.warning("All LLM API Keys missing! LLM analysis will be skipped/mocked.")

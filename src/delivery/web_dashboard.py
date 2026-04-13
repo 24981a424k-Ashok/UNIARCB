@@ -158,18 +158,32 @@ def normalize_article_data(data: dict):
     bullets_text = "\n".join([f"• {b}" for b in data.get(bullets_key, [])])
     data["content"] = f"### {data.get('title', 'Intelligence report')}\n\n**Summary:**\n{bullets_text}\n\n**Why It Matters:**\n{data.get(why_key, '')}\n\n**Who is Affected:**\n{data.get(who_key, '')}\n\n**Extra Context:**\n{data.get('extra_stuff', '')}\n\n**What Happens Next:**\n{data.get('what_happens_next', '')}\n\n---\n*Source: {data.get('official_url') or data.get('url') or 'Global Intel'}*"
     
-    # 4. Decoupled Architecture Image Patch
-    # If the image is locally generated (like a fallacy ad or user profile),
-    # we must ensure the decoupled frontend knows it lives on the backend port.
-    if data.get("image_url") and str(data["image_url"]).startswith("/static/"):
-        data["image_url"] = f"http://127.0.0.1:8000{data['image_url']}"
-        
+    # 4. Decoupled Architecture Image Patch & Fallback
+    # Ensure Absolute Image URLs (Crucial for Decoupled Architecture)
+    image_url = data.get("image_url")
+    # For categorized fallbacks
+    article_cat = data.get("category", "General")
+    # If student category is available, use it for better matching
+    if data.get("student_category"): 
+        article_cat = "Education"
+    
+    if not image_url or str(image_url).lower() == 'none' or str(image_url) == "":
+        data["image_url"] = get_fallback_image(data.get("title", ""), article_cat)
+    else:
+        # Check if it needs Port 8000 prefix (Internal Static Assets)
+        if str(image_url).startswith("/static/"):
+            # Prepend backend URL
+            data["image_url"] = f"http://127.0.0.1:8000{image_url}"
+        elif not str(image_url).startswith("http") and not str(image_url).startswith("data:"):
+            # Fallback for other relative paths
+            data["image_url"] = f"http://127.0.0.1:8000/static/{image_url.lstrip('/')}"
+            
     return data
 
 STUDENT_NEWS_CATEGORIES = [
     "Scholarships & Internships", "Exams & Results", "Policy & Research", 
     "Admissions & Courses", "Campus Life", "Career & Jobs", "Education",
-    "Student Opportunities", "Academic Research"
+    "Student Opportunities", "Academic Research", "Science & Health", "Tech"
 ]
 STUDENT_KEYWORDS = [
     "student", "exam", "school", "university", "college", "scholarship", "syllabus", 
@@ -178,7 +192,8 @@ STUDENT_KEYWORDS = [
     "research", "campus", "internship", "hiring", "recruitment", "youth", "academic", 
     "tuition", "entrance", "vacancy", "intern", "test", "result", "admit", "coaching", 
     "training", "fresher", "neet", "jee", "upsc", "ssc", "board exam", "admit card",
-    "fellowship", "study abroad", "visa", "student loan"
+    "fellowship", "study abroad", "visa", "student loan", "masters", "bachelors", "phd",
+    "placement", "recruiter", "layoff", "salary", "stipend", "cutoff", "eligibility"
 ]
 
 def is_student_article_logic(article):
@@ -219,67 +234,49 @@ def log_protocol_action(db: Session, action: str, target_type: str, target_id: s
         logger.error(f"Failed to log protocol action: {e}")
         db.rollback()
 
-FALLBACK_IMAGES = [
-    "https://images.unsplash.com/photo-1504711434969-e33886168f5c?q=80&w=1000",
-    "https://images.unsplash.com/photo-1495020689067-958852a7765e?q=80&w=1000",
-    "https://images.unsplash.com/photo-1476242484419-cf5c1d4ee04b?q=80&w=1000",
-    "https://images.unsplash.com/photo-1585829365294-bb7c63b3ecda?q=80&w=1000",
-    "https://images.unsplash.com/photo-1502139214982-d0ad755a619d?q=80&w=1000",
-    "https://images.unsplash.com/photo-1557683316-973673baf926?q=80&w=1000",
-    "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1000",
-    "https://images.unsplash.com/photo-1518770660439-4636190af475?q=80&w=1000",
-    "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=1000",
-    "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?q=80&w=1000",
-    "https://images.unsplash.com/photo-1526628953301-3e589a6a8b74?q=80&w=1000",
-    "https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=1000",
-    "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1000",
-    "https://images.unsplash.com/photo-1519389950473-47ba0277781c?q=80&w=1000",
-    "https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?q=80&w=1000",
-    "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=1000",
-    "https://images.unsplash.com/photo-1515378960530-7c0da6231fb1?q=80&w=1000",
-    "https://images.unsplash.com/photo-1498050108023-c5249f4df085?q=80&w=1000",
-    "https://images.unsplash.com/photo-1488590528505-98d2b5aba04b?q=80&w=1000",
-    "https://images.unsplash.com/photo-1525547719571-a2d4ac8945e2?q=80&w=1000",
-    "https://images.unsplash.com/photo-1531297484001-80022131f5a1?q=80&w=1000",
-    "https://images.unsplash.com/photo-1510511459019-5dee2c127ffb?q=80&w=1000",
-    "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=1000",
-    "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?q=80&w=1000",
-    "https://images.unsplash.com/photo-1531297484001-80022131f5a1?q=80&w=1000",
-    "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=1000",
-    "https://images.unsplash.com/photo-1519389950473-47ba0277781c?q=80&w=1000",
-    "https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?q=80&w=1000",
-    "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=1000",
-    "https://images.unsplash.com/photo-1515378960530-7c0da6231fb1?q=80&w=1000",
-    "https://images.unsplash.com/photo-1432888622747-4eb9a8f2c1d1?q=80&w=1000",
-    "https://images.unsplash.com/photo-1461749280684-dccba630e2f6?q=80&w=1000",
-    "https://images.unsplash.com/photo-1498050108023-c5249f4df085?q=80&w=1000",
-    "https://images.unsplash.com/photo-1518770660439-4636190af475?q=80&w=1000",
-    "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1000",
-    "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?q=80&w=1000",
-    "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=1000",
-    "https://images.unsplash.com/photo-1510915361894-db8b60106cb1?q=80&w=1000",
-    "https://images.unsplash.com/photo-1515879218367-8466d910aaa4?q=80&w=1000",
-    "https://images.unsplash.com/photo-1516116216624-53e697fedbea?q=80&w=1000",
-    "https://images.unsplash.com/photo-1517694712202-14dd9538aa97?q=80&w=1000",
-    "https://images.unsplash.com/photo-1537432376769-00f5c2f4c8d2?q=80&w=1000",
-    "https://images.unsplash.com/photo-1523961131990-5ea7c61b2107?q=80&w=1000",
-    "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1000",
-    "https://images.unsplash.com/photo-1504384308090-c894fdcc538d?q=80&w=1000",
-    "https://images.unsplash.com/photo-1518770660439-4636190af475?q=80&w=1000",
-    "https://images.unsplash.com/photo-1496065187959-7f07b8353c55?q=80&w=1000",
-    "https://images.unsplash.com/photo-1531297484001-80022131f5a1?q=80&w=1000",
-    "https://images.unsplash.com/photo-1519389950473-47ba0277781c?q=80&w=1000",
-    "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=1000",
-    "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?q=80&w=1000"
-]
+FALLBACK_BY_CATEGORY = {
+    "Education": [
+        "https://images.unsplash.com/photo-1523050335456-c38a89b7928b?q=80&w=1000",
+        "https://images.unsplash.com/photo-1541339907198-e08756dea43f?q=80&w=1000",
+        "https://images.unsplash.com/photo-1524178232363-1fb2b075b655?q=80&w=1000",
+        "https://images.unsplash.com/photo-1497633762265-9d179a990aa6?q=80&w=1000"
+    ],
+    "Technology": [
+        "https://images.unsplash.com/photo-1518770660439-4636190af475?q=80&w=1000",
+        "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?q=80&w=1000",
+        "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1000",
+        "https://images.unsplash.com/photo-1531297484001-80022131f5a1?q=80&w=1000"
+    ],
+    "Sports": [
+        "https://images.unsplash.com/photo-1504450758481-7338eba7524a?q=80&w=1000",
+        "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?q=80&w=1000",
+        "https://images.unsplash.com/photo-1517649763962-0c623066013b?q=80&w=1000"
+    ],
+    "Politics": [
+        "https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?q=80&w=1000",
+        "https://images.unsplash.com/photo-1540910419892-4a36d2c3266c?q=80&w=1000"
+    ],
+    "Finance": [
+        "https://images.unsplash.com/photo-1611974714451-22fb142371a5?q=80&w=1000",
+        "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?q=80&w=1000"
+    ],
+    "General": [
+        "https://images.unsplash.com/photo-1504711434969-e33886168f5c?q=80&w=1000",
+        "https://images.unsplash.com/photo-1495020689067-958852a7765e?q=80&w=1000",
+        "https://images.unsplash.com/photo-1476242484419-cf5c1d4ee04b?q=80&w=1000"
+    ]
+}
 
-def get_fallback_image(seed: str) -> str:
-    """Deterministically select a fallback image based on djb2 hash"""
-    if not seed: return FALLBACK_IMAGES[0]
+def get_fallback_image(seed: str, category: str = "General") -> str:
+    """Deterministically select a categorized fallback image based on djb2 hash"""
+    cat = category if category in FALLBACK_BY_CATEGORY else "General"
+    pool = FALLBACK_BY_CATEGORY[cat]
+    
+    if not seed: return pool[0]
     hash_val = 5381
     for char in seed:
         hash_val = ((hash_val << 5) + hash_val) + ord(char)
-    return FALLBACK_IMAGES[abs(hash_val) % len(FALLBACK_IMAGES)]
+    return pool[abs(hash_val) % len(pool)]
 def normalize_country(c):
     if not c: return None, [], 'english'
     mapping = {
@@ -329,7 +326,7 @@ async def api_bootstrap(
 ):
     """
     JSON bootstrap endpoint for the decoupled frontend.
-    Returns the exact same data context that the Jinja2 dashboard uses,
+    Returns the exact same data context that the Jinja2 uses,
     but as a clean JSON response instead of rendered HTML.
     """
     try:
@@ -386,7 +383,7 @@ async def api_bootstrap(
         }
 
         now_utc = datetime.utcnow()
-        cutoff = now_utc - timedelta(hours=72)
+        cutoff = now_utc - timedelta(hours=120) # 5 days back (User requested 4 days)
         def _fresh(item):
             pub = item.get("published_at")
             if pub and isinstance(pub, str):
@@ -398,6 +395,9 @@ async def api_bootstrap(
         for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
             if sec in digest_data and digest_data[sec]:
                 digest_data[sec] = [s for s in digest_data[sec] if _fresh(s)]
+                # NORMALIZE
+                for s in digest_data[sec]:
+                    normalize_article_data(s)
 
         # Category filter
         if category and digest_data:
@@ -419,21 +419,23 @@ async def api_bootstrap(
                     country_stories = v
                     break
             if country_stories:
+                # NORMALIZE
+                for s in country_stories:
+                    normalize_article_data(s)
                 digest_data["top_stories"] = country_stories
 
-        # Translation: If lang is not English, translate the digest content using the cache-aware bulk method
-        if lang and lang.lower() != 'english':
-            try:
-                logger.info(f"API Bootstrap: Translating content to {lang}")
-                node_data = {
-                    "stories": digest_data.get("top_stories", []) + 
-                               digest_data.get("brief", []) + 
-                               digest_data.get("trending_news", []) +
-                               digest_data.get("breaking_news", [])
-                }
-                await translator.translate_node_bulk(node_data, lang)
-            except Exception as e:
-                logger.error(f"API Bootstrap translation failed: {e}")
+                import asyncio
+                try:
+                    # Deadline for translation: 90s (Per User Request). 
+                    # This allows exhaustive retries across the multi-key pool.
+                    await asyncio.wait_for(
+                        translator.translate_node_bulk(node_data, lang),
+                        timeout=90.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Dashboard translation to {lang} timed out (50s). Returning original content.")
+                except Exception as e:
+                    logger.error(f"API Bootstrap translation failed: {e}")
 
         firebase_config = {
             "apiKey": settings.FIREBASE_API_KEY,
@@ -720,7 +722,12 @@ async def get_more_stories(category: str, offset: int, country: str = None, lang
             "sports": "Sports",
             "entertainment": "Entertainment",
             "ai": "AI & Machine Learning",
-            "ai_&_machine_learning": "AI & Machine Learning"
+            "ai_&_machine_learning": "AI & Machine Learning",
+            # Student Portal Categories
+            "scholarships_&_internships": "Education",
+            "exams_&_results": "Education",
+            "policy_&_research": "Education",
+            "admissions_&_courses": "Education"
         }
         
         target_key = category_map.get(normalized_category, category.strip())
@@ -975,6 +982,7 @@ class ChatRequest(BaseModel):
     query: str
 
 @router.post("/api/chat")
+@router.post("/api/v2/chat")
 async def chat_with_news(payload: ChatRequest, db: Session = Depends(get_db)):
     response = chat_engine.get_response(db, payload.query)
     return {"status": "success", "response": response}
@@ -1053,9 +1061,17 @@ async def get_state_news(payload: TranslateNodeRequest):
     # Translate concurrently (already optimized in translate_stories)
     translated_stories = await translator.translate_stories(all_state_stories[:15], lang)
     
+    # APPLY DEFINITIVE NORMALIZATION & DEDUPLICATION
+    unique_final = []
+    seen_ids = set()
+    for a in translated_stories:
+        if a.get('id') not in seen_ids:
+            seen_ids.add(a.get('id'))
+            unique_final.append(normalize_article_data(a))
+    
     return {
         "status": "success",
-        "stories": translated_stories
+        "stories": unique_final
     }
 
 
@@ -1326,6 +1342,8 @@ async def save_note(payload: NoteRequest):
 class UniverseRequest(BaseModel):
     country: str
 
+@router.post("/api/v2/universe/news")
+@router.get("/api/v2/universe/news")
 @router.post("/api/universe/news")
 async def get_universe_news(payload: UniverseRequest):
     try:
@@ -1714,8 +1732,9 @@ def _get_active_campaign(platform="main"):
         logger.debug(f"Campaign fetch failed for {platform}: {e}")
     return None
 
+@router.get("/api/v2/get-student-news")
 @router.get("/api/get-student-news")
-def api_get_student_news(category: str = None, profile: str = None, country: str = "India", offset: int = 0, limit: int = 10, db: Session = Depends(get_db)):
+async def api_get_student_news(category: str = None, profile: str = None, country: str = "India", lang: str = "english", offset: int = 0, limit: int = 10, db: Session = Depends(get_db)):
     """API endpoint to get student news JSON."""
     _update_student_cache_if_needed(db, force=False, country=country)
     target_name, _, _ = normalize_country(country)
@@ -1726,10 +1745,22 @@ def api_get_student_news(category: str = None, profile: str = None, country: str
     if profile:
         articles = [a for a in articles if profile in a.get("profiles", [])]
         
-    page_articles = articles[offset:offset+limit]
+    page_raw = articles[offset:offset+limit]
+    # APPLY DEFINITIVE NORMALIZATION
+    page_articles = [normalize_article_data(a) for a in page_raw]
+    
+    # Translation Injection (Perfection Restoration)
+    if lang and lang.lower() != 'english' and page_articles:
+        try:
+            node_data = {"stories": page_articles}
+            await translator.translate_node_bulk(node_data, lang)
+        except Exception as e:
+            logger.error(f"Student news translation failed: {e}")
+
     has_more = (offset + limit) < len(articles)
     return {"status": "success", "count": len(page_articles), "articles": page_articles, "has_more": has_more}
 
+@router.get("/api/v2/get-student-trends")
 @router.get("/api/get-student-trends")
 def api_get_student_trends(country: str = "India", db: Session = Depends(get_db)):
     """API endpoint to get student news trends."""
@@ -1738,7 +1769,7 @@ def api_get_student_trends(country: str = "India", db: Session = Depends(get_db)
     country_key = target_name.lower()
     return {"status": "success", "trends": _student_news_caches.get(country_key, {}).get("trends", {})}
 
-NEWSDATA_STUDENT_API_KEY = "pub_87a3d48b48ba4c15955866088bd380c8"
+NEWSDATA_STUDENT_API_KEY = settings.NEWSDATA_STUDENT_API_KEY or "pub_87a3d48b48ba4c15955866088bd380c8"
 
 def _fetch_newsdata_student_articles(country: str = "india") -> list:
     """Fetch comprehensive student news from newsdata.io across all categories."""
@@ -1781,8 +1812,8 @@ def _fetch_newsdata_student_articles(country: str = "india") -> list:
     seen_urls = set()
     country_code = "in" if country.lower() in ["india", "global", ""] else country[:2].lower()
     
-    # Fetch queries for top 3 categories for speed
-    for cat_name, query in list(CATEGORY_QUERIES.items())[:4]:
+    # Fetch all categories to ensure "All Updates" is also populated
+    for cat_name, query in CATEGORY_QUERIES.items():
         try:
             url = (
                 f"https://newsdata.io/api/1/news"
@@ -1791,7 +1822,7 @@ def _fetch_newsdata_student_articles(country: str = "india") -> list:
                 f"&country={country_code}"
                 f"&language=en"
                 f"&category=education"
-                f"&size=5"
+                f"&size=10"
             )
             resp = req_lib.get(url, timeout=8)
             if resp.status_code != 200:
@@ -1993,14 +2024,16 @@ def _update_student_cache_if_needed(db: Session, force: bool = False, country: s
 
 # REMOVED: /personal-agent UI route (Moved to Frontend Server)
 
+@router.get("/api/v2/search-news")
 @router.get("/api/search-news")
+@router.get("/api/v2/get-personal-news")
 @router.get("/api/get-personal-news")
 async def api_get_personal_news(interests: str = None, q: str = None, lang: str = 'english', db: Session = Depends(get_db)):
     """Fetch hyper-personalized news based on search query and selected interests."""
     try:
         from sqlalchemy import or_
         now_utc = datetime.utcnow()
-        lookback = now_utc - timedelta(days=60) # Extended lookback for better interest matching
+        lookback = now_utc - timedelta(days=90) # Extended lookback to capture more student/personal data
         
         search_terms = []
         if q: search_terms.append(q.lower().strip())
@@ -2009,28 +2042,43 @@ async def api_get_personal_news(interests: str = None, q: str = None, lang: str 
             search_terms.extend([i.strip().lower() for i in interests.split(',') if i.strip()])
         
         if not search_terms:
-            return {"status": "success", "articles": [], "has_more": False}
-            
-        filters = []
-        for term in search_terms:
-            # Title match
-            filters.append(VerifiedNews.title.ilike(f"%{term}%"))
-            # Category match (handles JSON string fragments)
-            filters.append(VerifiedNews.category.ilike(f"%{term}%"))
-            # Impact tags (SQLite friendly check)
-            filters.append(VerifiedNews.impact_tags.ilike(f"%{term}%"))
-            # Why it matters context
-            filters.append(VerifiedNews.why_it_matters.ilike(f"%{term}%"))
-            
-        articles = db.query(VerifiedNews).filter(
-            or_(*filters),
-            VerifiedNews.created_at >= lookback
-        ).order_by(VerifiedNews.created_at.desc(), VerifiedNews.impact_score.desc()).limit(40).all()
+            # If no interests specified, show top trending news as "Default Intelligence"
+            articles = db.query(VerifiedNews).filter(
+                VerifiedNews.created_at >= lookback
+            ).order_by(VerifiedNews.impact_score.desc(), VerifiedNews.created_at.desc()).limit(20).all()
+        else:
+            filters = []
+            for term in search_terms:
+                filters.append(VerifiedNews.title.ilike(f"%{term}%"))
+                filters.append(VerifiedNews.category.ilike(f"%{term}%"))
+                filters.append(VerifiedNews.impact_tags.ilike(f"%{term}%"))
+                filters.append(VerifiedNews.why_it_matters.ilike(f"%{term}%"))
+                
+            articles = db.query(VerifiedNews).filter(
+                or_(*filters),
+                VerifiedNews.created_at >= lookback
+            ).order_by(VerifiedNews.created_at.desc(), VerifiedNews.impact_score.desc()).limit(60).all()
         
+        # Deduplicate and normalize
         all_articles = []
+        seen_ids = set()
         for a in articles:
-            # Normalize complex fields for frontend safety
+            if a.id in seen_ids: continue
+            seen_ids.add(a.id)
+            
             normalized = normalize_article_data(a.to_dict())
+            
+            # Determine best tag matching the user's interests
+            matched_tag = "Intelligence"
+            if q:
+                matched_tag = q.capitalize()
+            elif interests:
+                # Find which interest matched
+                for term in [i.strip() for i in interests.split(',')]:
+                    if term.lower() in (a.title or "").lower() or term.lower() in (a.category or "").lower():
+                        matched_tag = term.capitalize()
+                        break
+            
             article_data = {
                 "id": a.id,
                 "title": normalized.get("title"),
@@ -2039,13 +2087,14 @@ async def api_get_personal_news(interests: str = None, q: str = None, lang: str 
                 "image_url": a.image_url or get_fallback_image(a.title),
                 "source_name": a.source_name,
                 "published_at": a.created_at.isoformat() if a.created_at else None,
-                "matched_interest": q.capitalize() if q and (not a.category or a.category.lower() == 'general') else (a.category or "Intelligence")
+                "matched_interest": matched_tag
             }
             all_articles.append(article_data)
 
         # Apply Translations if lang != english
         if lang and lang.lower() != 'english' and all_articles:
             try:
+                # Use the translator which now has the 6-key rotation and llama-3.3 model
                 trans_input = [{"title": a["title"], "summary": a["summary"]} for a in all_articles]
                 res = await translator._do_translate(trans_input, lang, "")
                 t_list = res.get("translated_stories", [])
@@ -2057,13 +2106,14 @@ async def api_get_personal_news(interests: str = None, q: str = None, lang: str 
             except Exception as e:
                 logger.error(f"Personal translation failed: {e}")
 
-        return {"status": "success", "articles": all_articles, "has_more": False}
+        return {"status": "success", "articles": all_articles[:40], "has_more": False}
     except Exception as e:
         logger.error(f"Personal news fetch failed: {e}")
         return {"status": "error", "message": "Neural search node offline."}
 
 # REMOVED: /crystal-ball UI route (Moved to Frontend Server)
 
+@router.get("/api/v2/geopolitics-prediction")
 @router.get("/api/geopolitics-prediction")
 async def api_get_prediction_geo(db: Session = Depends(get_db)):
     """Specialized Geopolitics Prediction for the analysis dashboard."""
@@ -2180,6 +2230,7 @@ async def verify_twilio_otp(payload: dict = Body(...), db: Session = Depends(get
 
 # Redundant /api/track-topic removed. Unified with /api/retention/track_topic in user_retention.py
 
+@router.post("/api/v2/articles/{news_id}/update")
 @router.post("/api/articles/{news_id}/update")
 async def update_article_analysis(news_id: int, db: Session = Depends(get_db)):
     """Request fresh AI analysis for a specific article."""

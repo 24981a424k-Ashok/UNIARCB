@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 import logging
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Retention"], prefix="/api/retention")
+router = APIRouter(tags=["Retention"], prefix="/api/v2/retention")
+router_legacy = APIRouter(tags=["Retention Legacy"], prefix="/api/retention")
 
 def get_db():
     db = SessionLocal()

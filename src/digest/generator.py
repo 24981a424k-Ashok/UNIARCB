@@ -190,48 +190,65 @@ class DigestGenerator:
         category_buckets = defaultdict(list)
         for n in sorted_news[:150]: # Pool from top 150
             cat = n.category or "General"
-            if len(category_buckets[cat]) < 4:
+            if len(category_buckets[cat]) < 10: # Collect more for better balancing
                 category_buckets[cat].append(n)
         
-        # Flattened balanced pool with Diversity Filter (Diversity Cap: Max 25% for any category)
+        # Flattened balanced pool with Diversity Filter (Diversity Cap: Max 10% for Sports)
         balanced_pool = []
-        limit_per_category = 3 # Ensure wide variety initially
         
-        # Priority sort: Get diverse set from all buckets first
-        for cat_list in sorted(category_buckets.values(), key=len, reverse=True):
-            balanced_pool.extend(cat_list[:limit_per_category])
-            
+        # --- MANDATORY CATEGORY MIX (Guarantee Top Section Diversity) ---
+        mandatory_mix = ["Business & Economy", "Technology", "Politics", "India / Local News", "World News"]
+        for m_cat in mandatory_mix:
+             found = category_buckets.get(m_cat, [])
+             balanced_pool.extend(found[:2]) # Grab up to 2 of each mandatory category first
+             
         # Sports Cap: If sports still dominates too much of the pool, shuffle it down
         sports_count = sum(1 for n in balanced_pool if n.category == "Sports")
-        if sports_count > (len(balanced_pool) * 0.25):
-             logger.info(f"Digest Generator: Sports Cap triggered ({sports_count} items). Rebalancing...")
-             # Keep only up to 25% of balanced_pool as sports, move rest back to pool
-             non_sports = [n for n in balanced_pool if n.category != "Sports"]
-             sports = [n for n in balanced_pool if n.category == "Sports"]
-             max_sports = int(len(balanced_pool) * 0.25)
-             balanced_pool = non_sports + sports[:max_sports]
+        # Global Sports Pool (from top 150)
+        global_sports = category_buckets.get("Sports", [])
         
+        # Limit Sports to Max 10% of total intended feed (Top 30-40)
+        max_sports = 3 
+        balanced_pool.extend([s for s in global_sports if s not in balanced_pool][:max_sports])
+        
+        # Fill remaining with anything NOT sports
+        for cat, items in category_buckets.items():
+            if cat != "Sports":
+                for it in items:
+                    if it not in balanced_pool and len(balanced_pool) < 30:
+                        balanced_pool.append(it)
+
         # Final Sort for quality
         balanced_pool = sorted(balanced_pool, key=calculate_rank_score, reverse=True)
         
-        # DIVERSITY RE-ORDER: Ensure top 5 are not dominated by Sports
+        # DIVERSITY RE-ORDER: Ensure top 5 are NOT dominated by Sports
         final_top_stories = []
         sports_count_top = 0
+        non_sports_added = 0
+        
+        # First pass: Mandatory non-sports at top
         for n in balanced_pool:
+            if n.category != "Sports":
+                final_top_stories.append(n)
+                non_sports_added += 1
+                if non_sports_added >= 5: break
+                
+        # Second pass: Everything else with strict Sports limit
+        for n in balanced_pool:
+            if n in final_top_stories: continue
             if n.category == "Sports":
-                if sports_count_top < 2: # Max 2 Sports in the very top section
+                if sports_count_top < 1: # Max 1 Sports in the visible top grid (Strict Diversity)
                     final_top_stories.append(n)
                     sports_count_top += 1
-                else:
-                    # Move other sports to the end of the pool
-                    continue
             else:
                 final_top_stories.append(n)
         
-        # Add back the skipped sports at the end
-        final_top_stories.extend([n for n in balanced_pool if n.category == "Sports" and n not in final_top_stories])
+        # Add back any skipped high-quality non-sports to reach 30
+        for n in sorted_news:
+            if n not in final_top_stories and n.category != "Sports" and len(final_top_stories) < 30:
+                final_top_stories.append(n)
         
-        top_10_pool = final_top_stories[:25] 
+        top_10_pool = final_top_stories[:30] 
         
         # Backfill with original sorted_news if too dry, but still apply the cap
         if len(top_10_pool) < 10:
@@ -330,9 +347,49 @@ class DigestGenerator:
                         cat = None # Mark as not fitting a specific category for now
 
             # Add to category with balancing (Global limit per category to avoid saturation)
+            if not cat or cat in ["General", "Other News", "Breaking News"]:
+                # --- CATEGORY RECOVERY LOGIC ---
+                text_pool = ((n.title or "") + " " + (n.why_it_matters or "")).lower()
+                recovery_map = {
+                    "Technology": ["tech", "ai", "software", "chip", "semiconductor", "digital", "startup", "robot", "cyber"],
+                    "Business & Economy": ["market", "stock", "inflation", "gdp", "trade", "bank", "finance", "ceo", "company", "merger", "startup", "revenue", "profit", "loss", "fiscal", "budget"],
+                    "Politics": ["government", "policy", "election", "biden", "trump", "modi", "minister", "senate", "law", "parliament", "treaty", "diplomatic"],
+                    "Science & Health": ["cancer", "health", "medical", "space", "study", "research", "doctor", "virus", "nasa", "pills", "vaccine", "biology"],
+                    "Sports": ["cricket", "football", "match", "fifa", "ipl", "tournament", "score", "player", "olympics", "goal", "wicket", "stadium"],
+                    "Education": ["student", "university", "college", "school", "scholarship", "exam", "education", "learning", "internship", "admission", "course", "campus", "recruitment", "result", "jee", "neet", "upsc", "gate", "fellowship", "stipend"],
+                    "Defense & Security": ["defense", "military", "army", "navy", "missile", "security", "weapon", "war", "border"]
+                }
+                
+                for r_cat, keywords in recovery_map.items():
+                    if any(kw in text_pool for kw in keywords):
+                        cat = r_cat
+                        break
+
+            # --- STUDENT PORTAL CATEGORIZATION ---
+            # If Education, we sub-categorize for the portal
+            if cat == "Education":
+                text_pool = ((n.title or "") + " " + (n.why_it_matters or "")).lower()
+                student_cat = "All Updates"
+                if any(kw in text_pool for kw in ["scholarship", "internship", "fellowship", "stipend", "grant", "financial aid", "funding"]):
+                    student_cat = "Scholarships & Internships"
+                elif any(kw in text_pool for kw in ["exam", "result", "score", "admit card", "board", "jee", "neet", "upsc", "gate", "cgl", "cutoff", "hall ticket"]):
+                    student_cat = "Exams & Results"
+                elif any(kw in text_pool for kw in ["admission", "apply now", "enroll", "university notice", "college notice", "course", "degree", "bachelors", "masters", "phd", "counseling"]):
+                    student_cat = "Admissions & Courses"
+                elif any(kw in text_pool for kw in ["career", "job", "hiring", "layoff", "placement", "salary", "recruitment", "vacancy", "walk-in", "startup", "internship"]):
+                    student_cat = "Career & Jobs"
+                
+                item_data["student_category"] = student_cat
+            
+            # --- QUALITY FIX: Ensure unique why/who if backend analysis is generic ---
+            if not n.why_it_matters or n.why_it_matters == "Critical update." or len(n.why_it_matters) < 20:
+                item_data["why"] = f"Key development in {cat} affecting regional and global standards. Significant for stakeholders monitoring {cat} trends."
+            if not n.who_is_affected or n.who_is_affected == "Industry Stakeholders" or len(n.who_is_affected) < 20:
+                item_data["affected"] = f"Professionals, students, and institutional bodies within the {cat} sector."
+
             if cat and cat in categories:
                 # DIVERSITY FILTER: Limit "Sports" more strictly if pool is already saturated
-                limit = 15 if cat == "Sports" else 25 
+                limit = 20 if cat == "Sports" else 30 
                 if len(categories[cat]) < limit:
                     categories[cat].append(item_data)
             

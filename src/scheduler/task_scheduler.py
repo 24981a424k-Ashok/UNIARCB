@@ -146,6 +146,12 @@ async def run_news_cycle():
                 news.impact_tags = result.get("impact_tags", [])
                 news.bias_rating = str(result.get("bias_rating", "Neutral"))
                 news.impact_score = int(result.get("impact_score", 5))
+                
+                # --- DIVERSITY REBALANCING: CAP SPORTS IMPACT ---
+                if result.get("category") == "Sports" or news.category == "Sports":
+                    is_major_event = any(k in (news.title or "").lower() for k in ["olympic", "fifa", "world cup", "championship", "final"])
+                    if not is_major_event and news.impact_score > 6:
+                         news.impact_score = 6 # Cap non-major sports at 6
                 news.country = result.get("country") or result.get("primary_geography") or (news.raw_news.country if news.raw_news else None)
                 
                 if news.raw_news and news.raw_news.source_id and news.raw_news.source_id.startswith("x-"):

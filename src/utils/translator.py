@@ -11,40 +11,45 @@ logger = logging.getLogger(__name__)
 
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_MODEL = "llama-3.1-70b-versatile"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 class NewsTranslator:
     def __init__(self):
-        # 1. Gather unique keys from settings pools
-        self.openai_keys = list(dict.fromkeys(settings.OPENAI_API_KEYS))
-        self.groq_keys = list(dict.fromkeys(settings.GROQ_API_KEYS))
+        # 1. Gather unique non-empty keys from settings pools
+        self.openai_keys = list(dict.fromkeys([k for k in settings.OPENAI_API_KEYS if k]))
+        self.groq_keys = list(dict.fromkeys([k for k in settings.GROQ_API_KEYS if k]))
         
-        if not self.openai_keys and not self.groq_keys:
+        # Combined Pool for high-speed rotation
+        self.all_keys = self.openai_keys + self.groq_keys
+        self.current_key_idx = 0
+        self._concurrency_limit = asyncio.Semaphore(10) # Max 10 concurrent AI bursts (optimized for multi-key pool)
+        
+        if not self.all_keys:
             logger.warning("No API keys found for NewsTranslator. Translation will be skipped.")
         else:
-            logger.info(f"NewsTranslator initialized with {len(self.openai_keys)} OpenAI and {len(self.groq_keys)} Groq keys.")
+            logger.info(f"NewsTranslator initialized with {len(self.all_keys)} keys (OpenAI: {len(self.openai_keys)}, Groq: {len(self.groq_keys)})")
         
         self._clients: Dict[str, AsyncOpenAI] = {}
 
     def _get_client(self, target_lang: str = None) -> tuple:
-        """Return (AsyncOpenAI client, key_info) using rotation, prioritizing OpenAI for quality."""
-        # 1. Try OpenAI Pool (Highest Quality)
-        if self.openai_keys:
-            idx = random.randint(0, len(self.openai_keys) - 1)
-            key = self.openai_keys[idx]
-            if key not in self._clients:
-                self._clients[key] = AsyncOpenAI(api_key=key)
-            return self._clients[key], f"OpenAI Pool#{idx + 1}"
-
-        # 2. Fallback to Groq Pool
-        if self.groq_keys:
-            idx = random.randint(0, len(self.groq_keys) - 1)
-            key = self.groq_keys[idx]
-            if key not in self._clients:
-                self._clients[key] = AsyncOpenAI(api_key=key, base_url=GROQ_BASE_URL)
-            return self._clients[key], f"Groq Pool#{idx + 1}"
+        """Return (AsyncOpenAI client, key_info) using steady rotation across all available keys."""
+        if not self.all_keys:
+            return None, "None"
             
-        return None, "None"
+        # Round-robin selection
+        idx = self.current_key_idx % len(self.all_keys)
+        self.current_key_idx += 1
+        key = self.all_keys[idx]
+        
+        is_groq = key.startswith("gsk_")
+        if key not in self._clients:
+            if is_groq:
+                self._clients[key] = AsyncOpenAI(api_key=key, base_url=GROQ_BASE_URL)
+            else:
+                self._clients[key] = AsyncOpenAI(api_key=key)
+        
+        provider = "Groq" if is_groq else "OpenAI"
+        return self._clients[key], f"{provider} Pool#{idx + 1}"
 
 
     async def translate_text(self, text: str, target_lang: str) -> str:
@@ -84,11 +89,11 @@ class NewsTranslator:
                         messages=[
                             {
                                 "role": "system",
-                                "content": f"You are a professional news translator. Translate the following news text into {target_lang}. Return ONLY the translated text."
+                                "content": f"You are a master news journalist and professional translator. Translate the following news content into {target_lang} with perfect grammar, tone, and cultural accuracy. Maintain the professional news style. UNLESS THE USER ASKS OTHERWISE, RETURN ONLY THE TRANSLATED TEXT. NO INTROS, NO OUTROS."
                             },
                             {"role": "user", "content": text}
                         ],
-                        temperature=0.2,
+                        temperature=0.1,
                         timeout=15
                     )
                     return response.choices[0].message.content.strip()
@@ -113,8 +118,8 @@ class NewsTranslator:
             if 'bullets' in story and story['bullets']:
                 story['bullets'] = await asyncio.gather(*[self.translate_text(b, target_lang) for b in story['bullets']])
             
-            # Translate key text fields
-            fields_to_translate = ['title', 'why', 'affected', 'headline']
+            # Translate key text fields (Adding 'summary' for Personal AI News)
+            fields_to_translate = ['title', 'summary', 'why', 'affected', 'headline']
             for field in fields_to_translate:
                 if field in story and story[field]:
                     story[field] = await self.translate_text(story[field], target_lang)
@@ -180,65 +185,119 @@ class NewsTranslator:
                 logger.info(f"0.1s perfection: All {len(stories)} articles loaded from cache for {target_lang}.")
                 return node_data
 
-            # 2. Batch Translate the rest
-            logger.info(f"Translating {len(untranslated_indices)} uncached articles to {target_lang}...")
+            # 2. Batch Translate the rest in parallel using simultaneous keys
+            logger.info(f"Translating {len(untranslated_indices)} uncached articles to {target_lang} in parallel batches...")
             
-            client, key_info = self._get_client(target_lang)
-            if not client:
-                return node_data
-
-            # Construct batch prompt for remaining
-            to_translate = [stories[i] for i in untranslated_indices]
-            articles_text = ""
-            for idx, story in enumerate(to_translate, 1):
-                bullets = story.get("bullets", [])
-                bullet_str = "\n".join(f"- {b}" for b in bullets)
-                articles_text += (
-                    f"STORY_{idx}\n"
-                    f"T: {story.get('title') or story.get('headline', '')}\n"
-                    f"B: {bullet_str}\n"
-                    f"W: {story.get('why') or story.get('why_it_matters', 'N/A')}\n"
-                    f"A: {story.get('affected') or story.get('who_is_affected', 'N/A')}\n"
-                    f"TGS: {', '.join(story.get('tags', []))}\n"
-                    f"BIA: {story.get('bias') or 'Neutral'}\n"
-                    f"---\n"
-                )
-
-            prompt = f"""Translate these news items to {target_lang}. Return ONLY a JSON object.
-Format: {{"translated": [ {{ "t": "title", "b": ["bullet1", "..."], "w": "why", "a": "affected", "tgs": ["tag1", "..."], "bia": "bias" }} ]}}
-Items:
-{articles_text}"""
-
-            response = await client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a professional translator. Return ONLY JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"}
-            )
+            to_translate_full = [stories[i] for i in untranslated_indices]
+            batch_size = 4 # Optimized for Llama-3 / Groq stability
+            batches = [to_translate_full[i:i + batch_size] for i in range(0, len(to_translate_full), batch_size)]
             
-            raw_result = json.loads(response.choices[0].message.content.strip())
-            translated_list = raw_result.get("translated", [])
+            def _extract_json(text_content):
+                """Search for and extract valid JSON from a mixed-text response."""
+                if not text_content: return None
+                try:
+                    # Clean markdown tags
+                    clean = text_content.strip()
+                    if "```json" in clean:
+                        clean = clean.split("```json")[1].split("```")[0].strip()
+                    elif "```" in clean:
+                        clean = clean.split("```")[1].strip()
+                    
+                    # Find start and end of JSON object
+                    start = clean.find('{')
+                    end = clean.rfind('}')
+                    if start != -1 and end != -1:
+                        clean = clean[start:end+1]
+                    
+                    return json.loads(clean)
+                except Exception as e:
+                    logger.warning(f"JSON extraction failed: {e}. Raw: {text_content[:100]}...")
+                    return None
+
+            async def translate_batch(batch_items, b_idx):
+                async with self._concurrency_limit:
+                    client, key_info = self._get_client(target_lang)
+                    if not client: return []
+                    await asyncio.sleep(b_idx * 0.4) 
+                
+                # RECONSTRUCTING ARTICLE DATA FOR AI
+                articles_text = ""
+                for idx, story in enumerate(batch_items, 1):
+                    bullets = story.get("bullets", [])
+                    bullet_str = "\n".join(f"- {b}" for b in bullets)
+                    articles_text += (
+                        f"STORY_{idx}\n"
+                        f"T: {story.get('title') or story.get('headline', '')}\n"
+                        f"B: {bullet_str}\n"
+                        f"S: {story.get('summary') or 'N/A'}\n"
+                        f"W: {story.get('why') or story.get('why_it_matters', 'N/A')}\n"
+                        f"A: {story.get('affected') or story.get('who_is_affected', 'N/A')}\n"
+                        f"---\n"
+                    )
+
+                # EXHAUSTIVE RETRY LOOP: Try every key in the pool before giving up
+                max_retries = len(self.all_keys)
+                for attempt in range(max_retries):
+                    try:
+                        # Determine model for current key
+                        batch_model = GROQ_MODEL if "Groq" in key_info else "gpt-4o-mini"
+                        
+                        response = await client.chat.completions.create(
+                            model=batch_model,
+                            messages=[
+                                {"role": "system", "content": f"You are a professional journalist group translating intelligence reports to {target_lang}. Return ONLY a JSON object. No conversational filler."},
+                                {"role": "user", "content": f"Translate these items to {target_lang}:\n{articles_text}\nFormat as JSON: {{\"translated\": [ {{ \"t\": \"title\", \"b\": [\"bullet\"], \"s\": \"summary\", \"w\": \"why\", \"a\": \"affected\" }} ]}}"}
+                            ],
+                            temperature=0.1,
+                            timeout=45 # High timeout for complex languages
+                        )
+                        raw_content = response.choices[0].message.content.strip()
+                        raw_result = _extract_json(raw_content)
+                        
+                        if raw_result and raw_result.get("translated"):
+                            return raw_result.get("translated")
+                        
+                        raise ValueError("Invalid or empty translation result")
+
+                    except Exception as e:
+                        if "429" in str(e) or "rate_limit" in str(e).lower():
+                            logger.warning(f"Batch {b_idx} Retry {attempt+1}/{max_retries}: 429 Rate Limit on {key_info}. Cycling key...")
+                        else:
+                            logger.error(f"Batch {b_idx} Retry {attempt+1}/{max_retries} failed on {key_info}: {e}")
+                        
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2 * (attempt + 1)) # Incremental backoff
+                            client, key_info = self._get_client(target_lang) # Get NEXT key in rotation
+                        else:
+                            logger.error(f"Exhausted all {max_retries} keys for Batch {b_idx}. Returning empty.")
+                
+                return []
+
+            # Execute all batches simultaneously (distributed across keys automatically by rotation)
+            batch_results = await asyncio.gather(*[translate_batch(b, i) for i, b in enumerate(batches)])
+            
+            # Flatten results and apply
+            all_translated = []
+            for res_list in batch_results:
+                all_translated.extend(res_list)
 
             # 3. Apply translations AND Update Cache
             for i, idx in enumerate(untranslated_indices):
-                if i >= len(translated_list): break
+                if i >= len(all_translated): break
                 
                 orig = stories[idx]
-                tr = translated_list[i]
+                tr = all_translated[i]
                 
                 # Update story object
                 orig["title"] = tr.get("t", orig.get("title"))
                 orig["headline"] = tr.get("t", orig.get("headline"))
                 orig["bullets"] = tr.get("b", orig.get("bullets"))
+                orig["summary"] = tr.get("s", orig.get("summary"))
                 orig["why"] = tr.get("w", orig.get("why"))
                 orig["affected"] = tr.get("a", orig.get("affected"))
-                orig["tags"] = tr.get("tgs", orig.get("tags", []))
-                orig["bias"] = tr.get("bia", orig.get("bias", "Neutral"))
+                orig["is_translated"] = True
 
-                # PERSIST TO DATABASE
+                # PERSIST TO DATABASE CACHE
                 article_id = orig.get("id")
                 if article_id and isinstance(article_id, (int, str)) and str(article_id).isdigit():
                     article = db.query(VerifiedNews).filter(VerifiedNews.id == int(article_id)).first()
@@ -251,6 +310,7 @@ Items:
                         cache[target_lang] = {
                             "title": orig["title"],
                             "bullets": orig["bullets"],
+                            "summary": orig.get("summary", ""),
                             "why": orig["why"],
                             "affected": orig["affected"],
                             "tags": orig.get("tags", []),

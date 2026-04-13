@@ -35,10 +35,11 @@ OPENAI_API_KEYS = [
 OPENAI_API_KEYS = [k for k in OPENAI_API_KEYS if k]
 OPENAI_API_KEY = OPENAI_API_KEYS[0] if OPENAI_API_KEYS else None
 
-# 2. Groq Pool (2 Keys)
+# 2. Groq Pool (3 Keys)
 GROQ_API_KEYS = [
     os.getenv("GROQ_KEY_1"),
-    os.getenv("GROQ_KEY_2")
+    os.getenv("GROQ_KEY_2"),
+    os.getenv("GROQ_KEY_3")
 ]
 GROQ_API_KEYS = [k for k in GROQ_API_KEYS if k]
 GROQ_API_KEY = GROQ_API_KEYS[0] if GROQ_API_KEYS else None
@@ -82,6 +83,9 @@ VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
 SCHEDULE_TIME = os.getenv("SCHEDULE_TIME", "06:00")
 MIN_CREDIBILITY_SCORE = 0.4  # Lowered from 0.6 for better density
 SIMILARITY_THRESHOLD = 0.85
+
+# NewsData.io Settings
+NEWSDATA_STUDENT_API_KEY = os.getenv("NEWSDATA_STUDENT_API_KEY")
 
 # Admin Credentials — MUST be set via environment variables (no insecure defaults)
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@uniintel.com")
