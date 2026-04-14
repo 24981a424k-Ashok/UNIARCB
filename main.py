@@ -194,6 +194,14 @@ async def maintenance_middleware(request: Request, call_next):
 
 # Re-enable backend static file serving specifically for user-uploaded images and generated graphics
 from fastapi.staticfiles import StaticFiles
+
+# --- PERSISTENT AUDIO SERVING ---
+# We serve audio from the persistent DATA_DIR/audio folder (Railway Persistence)
+from src.config.settings import DATA_DIR
+audio_dir = DATA_DIR / "audio"
+audio_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static/audio", StaticFiles(directory=str(audio_dir)), name="static_audio")
+
 static_path = os.path.join(BACKEND_DIR, "static")
 if os.path.exists(static_path):
     app.mount("/static", StaticFiles(directory=static_path), name="static")

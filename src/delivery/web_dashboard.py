@@ -450,19 +450,6 @@ async def api_bootstrap(
                 digest_data["is_system_initializing"] = False 
 
 
-                import asyncio
-                try:
-                    # Deadline for translation: 90s (Per User Request). 
-                    # This allows exhaustive retries across the multi-key pool.
-                    await asyncio.wait_for(
-                        translator.translate_node_bulk(digest_data, lang),
-                        timeout=90.0
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"Dashboard translation to {lang} timed out (50s). Returning original content.")
-                except Exception as e:
-                    logger.error(f"API Bootstrap translation failed: {e}")
-
         firebase_config = {
             "apiKey": settings.FIREBASE_API_KEY,
             "authDomain": settings.FIREBASE_AUTH_DOMAIN,
@@ -471,6 +458,18 @@ async def api_bootstrap(
             "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
             "appId": settings.FIREBASE_APP_ID
         }
+
+        # --- GLOBAL TRANSLATION PASS (Strict Requirement) ---
+        if lang and lang.lower() != 'english' and digest_data:
+            import asyncio
+            try:
+                # Deadline for translation: 90s (Allows for multi-key pool retries)
+                await asyncio.wait_for(
+                    translator.translate_node_bulk(digest_data, lang),
+                    timeout=90.0
+                )
+            except Exception as e:
+                logger.error(f"Global API Bootstrap translation failed: {e}")
 
         return {
             "status": "success",

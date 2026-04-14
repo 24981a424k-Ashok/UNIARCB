@@ -9,7 +9,9 @@ logger = logging.getLogger(__name__)
 
 class AudioManager:
     def __init__(self):
-        self.output_dir = Path("web/static/audio")
+        # Move audio to persistent data directory for Railway/HF persistence
+        from src.config.settings import DATA_DIR
+        self.output_dir = DATA_DIR / "audio"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.keys = list(dict.fromkeys(settings.OPENAI_API_KEYS))
         
