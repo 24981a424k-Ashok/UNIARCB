@@ -68,9 +68,11 @@ _env_db_url = os.getenv("DATABASE_URL", "")
 if _env_db_url.startswith("sqlite:///"):
     _db_path_part = _env_db_url.replace("sqlite:///", "")
     if not os.path.isabs(_db_path_part):
-        # Resolve 'data/news.db' to just 'news.db' if it's going inside DATA_DIR
-        if _db_path_part.startswith("data/"):
-            _db_path_part = _db_path_part.replace("data/", "", 1)
+        # Strip common prefixes that might cause double-joining
+        for prefix in ["app/data/", "data/"]:
+            if _db_path_part.startswith(prefix):
+                _db_path_part = _db_path_part.replace(prefix, "", 1)
+                break
         _abs_db_path = (DATA_DIR / _db_path_part).resolve().absolute()
         DATABASE_URL = f"sqlite:///{_abs_db_path.as_posix()}"
     else:
