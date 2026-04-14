@@ -633,21 +633,53 @@ async def request_article_update(article_id: int, background_tasks: BackgroundTa
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
     
-    def _do_update(art_id: int, title: str):
-        """Background task: re-analyze article without blocking the request."""
+    async def _do_update(art_id: int, title: str):
+        """Background task: re-analyze article with actual AI."""
         import asyncio
+        from src.analysis.llm_analyzer import LLMAnalyzer
+        from src.database.models import RawNews
+        
+        db2 = SessionLocal()
         try:
-            db2 = SessionLocal()
             art = db2.query(VerifiedNews).filter(VerifiedNews.id == art_id).first()
             if not art:
                 return
-            # Touch the updated_at timestamp so user sees it was refreshed
-            art.updated_at = datetime.utcnow() if hasattr(art, 'updated_at') else None
-            db2.commit()
-            db2.close()
-            logger.info(f"Article {art_id} update requested: '{title[:60]}...'")
+            
+            # 1. Fetch source content from RawNews if possible
+            content = ""
+            if art.raw_news:
+                content = art.raw_news.description or art.raw_news.content or ""
+            
+            # 2. Run real analysis
+            analyzer = LLMAnalyzer()
+            article_data = {"title": art.title, "content": content}
+            
+            # We use analyze_batch with a single item to leverage the rotation logic
+            results = await analyzer.analyze_batch([article_data])
+            
+            if results and len(results) > 0:
+                res = results[0]
+                # Map fields back to VerifiedNews model
+                art.summary_bullets = res.get("summary_bullets") or art.summary_bullets
+                art.why_it_matters = res.get("why_it_matters") or art.why_it_matters
+                art.who_is_affected = res.get("who_is_affected") or art.who_is_affected
+                art.bias_rating = res.get("bias_rating") or art.bias_rating
+                art.sentiment = res.get("sentiment") or art.sentiment
+                art.impact_score = res.get("impact_score") or art.impact_score
+                art.updated_at = datetime.utcnow()
+                
+                db2.commit()
+                logger.info(f"✅ Article {art_id} RE-ANALYZED successfully: '{title[:60]}...'")
+            else:
+                # Touch timestamp even if AI fails
+                art.updated_at = datetime.utcnow()
+                db2.commit()
+                logger.warning(f"⚠️ Article {art_id} AI analysis returned no results, only timestamp was touched.")
+                
         except Exception as e:
-            logger.error(f"Background article update failed for {art_id}: {e}")
+            logger.error(f"❌ Background article AI update failed for {art_id}: {e}")
+        finally:
+            db2.close()
     
     background_tasks.add_task(_do_update, article_id, article.title or "")
     return {"status": "success", "message": f"Article #{article_id} queued for refresh."}

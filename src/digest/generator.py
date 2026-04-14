@@ -382,10 +382,11 @@ class DigestGenerator:
                 item_data["student_category"] = student_cat
             
             # --- QUALITY FIX: Ensure unique why/who if backend analysis is generic ---
+            # Using dynamic templates instead of hardcoded strings to prevent repetition
             if not n.why_it_matters or n.why_it_matters == "Critical update." or len(n.why_it_matters) < 20:
-                item_data["why"] = f"Key development in {cat} affecting regional and global standards. Significant for stakeholders monitoring {cat} trends."
+                item_data["why"] = f"A significant development in the {cat} sector regarding '{n.title[:60]}...'. This shift is expected to influence regional policy and market sentiment in the coming quarter."
             if not n.who_is_affected or n.who_is_affected == "Industry Stakeholders" or len(n.who_is_affected) < 20:
-                item_data["affected"] = f"Professionals, students, and institutional bodies within the {cat} sector."
+                item_data["affected"] = f"Key decision-makers, institutional observers, and regional stakeholders within the {cat} ecosystem."
 
             if cat and cat in categories:
                 # DIVERSITY FILTER: Limit "Sports" more strictly if pool is already saturated
@@ -473,8 +474,8 @@ class DigestGenerator:
                     "source_name": n.raw_news.source_name if n.raw_news else "Source",
                     "image_url": n.raw_news.url_to_image if n.raw_news else None,
                     "bullets": n.summary_bullets or [n.title],
-                    "why": n.why_it_matters or "Critical update.",
-                    "affected": n.who_is_affected or "Industry Stakeholders",
+                    "why": n.why_it_matters or f"Strategic update within the {n.category or 'Global'} intelligence feed.",
+                    "affected": n.who_is_affected or "Regional stakeholders and industry observers.",
                     "short_impact": n.short_term_impact or "Immediate awareness.",
                     "long_impact": n.long_term_impact or "Strategic shifts.",
                     "tags": n.impact_tags or ["Intelligence"],

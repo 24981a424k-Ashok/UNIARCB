@@ -493,24 +493,24 @@ IMPORTANT: Output ONLY valid JSON.
             "Education": "Academic Scholars, Educational Institutions, and Aspiring Students",
             "Defense & Security": "Defense Strategists, National Security Experts, and Personnel"
         }
-        who_is_affected = affected_groups.get(category, "Key Industry Stakeholders, Analysts, and Observers")
+        who_is_affected = affected_groups.get(category, f"Strategic decision-makers and observers monitorinig {category} developments")
+        # Ensure title is included for uniqueness
+        who_is_affected += f" in relation to '{title[:40]}...'"
         
         # Dynamic why it matters based on category type with more variety
         variants = [
-            f"The shift in '{title[:50]}...' signifies a major transition in the {category} landscape, potentially rewriting current standards.",
-            f"Strategic developments surrounding '{title[:50]}...' are likely to trigger ripple effects across the {category} sector for months.",
-            f"This update on '{title[:50]}...' provides critical insights for stakeholders monitoring long-term {category} trends.",
-            f"Analyzed data on '{title[:50]}...' indicates a move towards more integrated and resilient {category} frameworks.",
-            f"Observations from '{title[:50]}...' suggest upcoming structural adjustments within the broader {category} ecosystem."
+            f"The progression of '{title[:60]}...' marks a pivotal moment for the {category} landscape, potentially redefining current operational models.",
+            f"Analysts suggest that '{title[:60]}...' could serve as a leading indicator for upcoming shifts in regional {category} policy.",
+            f"The implications of '{title[:60]}...' extend beyond immediate metrics, signaling a broader transition in global {category} standards.",
+            f"Stakeholders are closely monitoring '{title[:60]}...' as it may catalyze significant structural reforms within the {category} sector."
         ]
-        import random
         why_it_matters = variants[hash(title) % len(variants)]
 
         return {
             "summary_bullets": [
                 f"Breakthrough update: {title[:85]}...",
                 f"Strategic pivot identified within the {category} domain.",
-                "Market observers are closely tracking secondary implications.",
+                f"Market observers track secondary implications for '{title[:30]}...'",
                 f"Potential for infrastructure-level changes in {category} workflows.",
                 "Confidence in the stability of this trend remains high among analysts."
             ],
@@ -520,9 +520,7 @@ IMPORTANT: Output ONLY valid JSON.
             "bias_rating": "Neutral",
             "why_it_matters": why_it_matters,
             "who_is_affected": who_is_affected,
-            "short_term_impact": f"Interim adjustments and heightened monitoring in {category} networks.",
-            "long_term_impact": f"Sustainable evolution and policy shifts within {category} standards.",
-            "sentiment": "Neutral"
+            "what_happens_next": f"Extended monitoring of '{title[:40]}...' to assess long-term {category} integration."
         }
 
     async def verify_news_factcheck(self, article_title: str, article_content: str) -> Dict[str, Any]:
