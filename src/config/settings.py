@@ -64,18 +64,24 @@ FIREBASE_MESSAGING_SENDER_ID = os.getenv("FIREBASE_MESSAGING_SENDER_ID")
 FIREBASE_APP_ID = os.getenv("FIREBASE_APP_ID")
 
 # Database Configuration
-_db_url = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/news.db")
-if _db_url.startswith("sqlite:///"):
-    db_path = _db_url.replace("sqlite:///", "")
-    if not os.path.isabs(db_path):
-        # Resolve relative to project root / data directory
-        if db_path.startswith("data/"):
-             db_path = db_path.replace("data/", "", 1)
-        DATABASE_URL = f"sqlite:///{DATA_DIR / db_path}"
+_env_db_url = os.getenv("DATABASE_URL", "")
+if _env_db_url.startswith("sqlite:///"):
+    _db_path_part = _env_db_url.replace("sqlite:///", "")
+    if not os.path.isabs(_db_path_part):
+        # Resolve 'data/news.db' to just 'news.db' if it's going inside DATA_DIR
+        if _db_path_part.startswith("data/"):
+            _db_path_part = _db_path_part.replace("data/", "", 1)
+        _abs_db_path = (DATA_DIR / _db_path_part).resolve().absolute()
+        DATABASE_URL = f"sqlite:///{_abs_db_path.as_posix()}"
     else:
-        DATABASE_URL = _db_url
+        DATABASE_URL = _env_db_url
 else:
-    DATABASE_URL = _db_url
+    # Use default
+    _default_db = (DATA_DIR / "news.db").resolve().absolute()
+    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_default_db.as_posix()}")
+
+print(f"[DEBUG] DATA_DIR resolved to: {DATA_DIR.resolve().absolute()}")
+print(f"[DEBUG] DATABASE_URL set to: {DATABASE_URL}")
 
 VECTOR_DB_PATH = DATA_DIR / "vector_store.index"
 

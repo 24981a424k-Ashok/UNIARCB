@@ -308,4 +308,5 @@ else:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
+    print(f"[DEBUG] Initializing database with engine: {engine.url}")
     Base.metadata.create_all(bind=engine)
