@@ -24,6 +24,14 @@ from src.config.firebase_config import initialize_firebase
 
 async def run_news_cycle():
     logger.info("Starting Daily News Cycle...")
+    
+    # Update global monitor in main.py if possible
+    try:
+        import main
+        main.LAST_CYCLE_RUN = datetime.utcnow().isoformat()
+    except:
+        pass
+
     initialize_firebase()
     db = SessionLocal()
     
@@ -312,7 +320,7 @@ def start_scheduler():
         minutes=15, 
         next_run_time=run_date, 
         id='full_news_cycle',
-        max_instances=3,
+        max_instances=1, # Ensure only one cycle runs at a time to prevent DB lock
         misfire_grace_time=3600,
         coalesce=True
     )

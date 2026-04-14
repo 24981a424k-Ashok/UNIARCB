@@ -40,6 +40,10 @@ except Exception as e:
 
 from src.database.models import init_db
 
+# GLOBAL STATE FOR MONITORING
+LAST_CYCLE_RUN = "Never"
+DB_TYPE = "Unknown"
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting AI News Intelligence Agent (Backend API)...")
@@ -111,6 +115,41 @@ async def lifespan(app: FastAPI):
     if scheduler:
         scheduler.shutdown()
 
+
+@app.get("/api/v2/system/health")
+async def system_health():
+    """Diagnostic endpoint to verify if the 15-minute cycle is alive."""
+    from src.database.models import SessionLocal, VerifiedNews
+    from src.config.settings import DATABASE_URL
+    import datetime
+    
+    db = SessionLocal()
+    try:
+        count = db.query(VerifiedNews).count()
+        last_article = db.query(VerifiedNews).order_by(VerifiedNews.id.desc()).first()
+        db_status = "Connected"
+    except Exception as e:
+        count = 0
+        last_article = None
+        db_status = f"Error: {str(e)}"
+    finally:
+        db.close()
+        
+    return {
+        "status": "online",
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "database": {
+            "status": db_status,
+            "type": "Postgres/Supabase" if "supabase" in DATABASE_URL.lower() else "Local SQLite",
+            "article_count": count,
+            "last_article_id": last_article.id if last_article else None,
+            "last_article_time": last_article.created_at.isoformat() if last_article and hasattr(last_article, 'created_at') else "Unknown"
+        },
+        "scheduler": {
+            "last_run": LAST_CYCLE_RUN,
+            "interval": "15 Minutes"
+        }
+    }
 
 app = FastAPI(title="AI News Intelligence Agent - Backend API", lifespan=lifespan)
 

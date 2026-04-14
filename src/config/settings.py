@@ -82,8 +82,12 @@ else:
     _default_db = (DATA_DIR / "news.db").resolve().absolute()
     DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_default_db.as_posix()}")
 
-print(f"[DEBUG] DATA_DIR resolved to: {DATA_DIR.resolve().absolute()}")
-print(f"[DEBUG] DATABASE_URL set to: {DATABASE_URL}")
+# Log Active Database (Safe Diagnostic)
+_log_url = DATABASE_URL
+if "@" in _log_url:
+    _log_url = f"{_log_url.split('://')[0]}://****@{_log_url.split('@')[-1]}"
+print(f"[BOOT] 📁 DATA_DIR: {DATA_DIR.resolve().absolute()}")
+print(f"[BOOT] 🚀 DATABASE: {_log_url}")
 
 VECTOR_DB_PATH = DATA_DIR / "vector_store.index"
 
