@@ -134,24 +134,37 @@ class VerificationEngine:
                 is_dupe = True
                 logger.info(f"Duplicate found (Exact Title): {article.title}")
 
-            # B. Semantic Similarity
-            if not is_dupe and self.model and existing_embeddings is not None and len(existing_embeddings) > 0:
-                try:
-                    from sentence_transformers import util
-                    text_to_check = article.title + " " + (article.content[:200] if article.content else "")
-                    new_emb = self.model.encode(text_to_check, convert_to_tensor=True)
-                    
-                    # Compute cosine similarities
-                    cosine_scores = util.cos_sim(new_emb, existing_embeddings)
-                    
-                    # Find best match
-                    best_score = cosine_scores.max().item()
-                    
-                    if best_score > 0.85: # Threshold for "same story"
-                        is_dupe = True
-                        logger.info(f"Duplicate found (Semantic {best_score:.2f}): {article.title}")
-                except Exception as e:
-                    logger.warning(f"Semantic deduplication failed: {e}")
+            # B. Semantic Similarity (with Algorithm Fallback)
+            if not is_dupe:
+                if self.model and existing_embeddings is not None and len(existing_embeddings) > 0:
+                    try:
+                        from sentence_transformers import util
+                        text_to_check = article.title + " " + (article.content[:200] if article.content else "")
+                        new_emb = self.model.encode(text_to_check, convert_to_tensor=True)
+                        cosine_scores = util.cos_sim(new_emb, existing_embeddings)
+                        best_score = cosine_scores.max().item()
+                        if best_score > 0.85:
+                            is_dupe = True
+                            logger.info(f"Duplicate found (Semantic {best_score:.2f}): {article.title}")
+                    except Exception as e:
+                        logger.warning(f"Semantic deduplication failed, using fallback: {e}")
+                
+                # B2. LIGHTWEIGHT FALLBACK: Jaccard Similarity (Word Overlap)
+                if not is_dupe and not self.model and existing_titles:
+                    try:
+                        new_tokens = set((article.title or "").lower().split())
+                        for ex_title in existing_titles:
+                            ex_tokens = set(ex_title.lower().split())
+                            if not new_tokens or not ex_tokens: continue
+                            intersection = len(new_tokens.intersection(ex_tokens))
+                            union = len(new_tokens.union(ex_tokens))
+                            jaccard = intersection / union
+                            if jaccard > 0.6: # Threshold for 60% word overlap
+                                is_dupe = True
+                                logger.info(f"Duplicate found (Jaccard Fallback {jaccard:.2f}): {article.title}")
+                                break
+                    except Exception as e:
+                        logger.error(f"Fallback deduplication failed: {e}")
 
             if is_dupe:
                 article.processed = True
