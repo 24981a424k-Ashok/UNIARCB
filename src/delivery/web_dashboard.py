@@ -1957,10 +1957,15 @@ def _update_student_cache_if_needed(db: Session, force: bool = False, country: s
         "Career & Jobs": "show_career"
     }
     
-    configs = {c.config_key: c.config_value for c in db.query(SystemConfig).all()}
-    for display_name, config_key in cat_map.items():
-        if configs.get(config_key, "true") == "true":
-            enabled_cats.append(display_name)
+    try:
+        configs = {c.config_key: c.config_value for c in db.query(SystemConfig).all()}
+        for display_name, config_key in cat_map.items():
+            if configs.get(config_key, "true") == "true":
+                enabled_cats.append(display_name)
+    except Exception as e:
+        logger.warning(f"SystemConfig query failed in student update (using defaults): {e}")
+        # Default: all categories enabled
+        enabled_cats.extend(list(cat_map.keys()))
     
     # --- Internal Processing Variables ---
     processed_articles = []
@@ -2008,7 +2013,7 @@ def _update_student_cache_if_needed(db: Session, force: bool = False, country: s
             "tags": [f"#{cat.split(' ')[0]}"],
             "profiles": ["University Student", "Job Seeker"],
             "action_label": "Read Intelligence →",
-            "trend_score": 1000 if article.impact_score >= 100 else (100 if article.impact_score > 8 else 85),
+            "trend_score": 1000 if (article.impact_score or 0) >= 100 else (100 if (article.impact_score or 0) > 8 else 85),
         }
         
         if student_data["url"] not in seen_urls:
