@@ -474,8 +474,13 @@ class DigestGenerator:
                     "source_name": n.raw_news.source_name if n.raw_news else "Source",
                     "image_url": n.raw_news.url_to_image if n.raw_news else None,
                     "bullets": n.summary_bullets or [n.title],
-                    "why": n.why_it_matters or f"Strategic update within the {n.category or 'Global'} intelligence feed.",
-                    "affected": n.who_is_affected or "Regional stakeholders and industry observers.",
+                    "why": n.why_it_matters or (
+                        f"Strategic advancement in {n.category or 'Global'} intelligence. "
+                        f"Analysts examine the long-term potential of '{n.title[:40]}...' to redefine local standards."
+                    ),
+                    "affected": n.who_is_affected or (
+                        f"Policy makers, industry specialized groups, and regional stakeholders monitoring '{n.category or 'Global'}' developments."
+                    ),
                     "short_impact": n.short_term_impact or "Immediate awareness.",
                     "long_impact": n.long_term_impact or "Strategic shifts.",
                     "tags": n.impact_tags or ["Intelligence"],

@@ -58,6 +58,8 @@ LANGUAGE_TO_STATES = {
 }
 
 router = APIRouter()
+from src.delivery.user_retention import router as retention_router
+router.include_router(retention_router)
 # templates = Jinja2Templates(directory="web/templates") # REMOVED: Backend is pure API now
 
 from fastapi.responses import RedirectResponse
@@ -374,6 +376,9 @@ async def api_bootstrap(
                 unique_papers.append({"id": p.id, "name": p.name, "country": p.country, "url": p.url, "logo_color": p.logo_color, "logo_text": p.logo_text})
 
         categories = [c[0] for c in db.query(VerifiedNews.category).distinct().all() if c[0]]
+        if len(categories) < 5:
+            # Inject default categories if DB is sparse to ensure UI looks full
+            categories = list(set(STUDENT_NEWS_CATEGORIES + ["Politics", "Tech", "Business", "Sports", "World News", "Entertainment", "Environment"]))
 
         # Digest processing (freshness + dedup)
         import copy as _copy
@@ -429,7 +434,7 @@ async def api_bootstrap(
                     # Deadline for translation: 90s (Per User Request). 
                     # This allows exhaustive retries across the multi-key pool.
                     await asyncio.wait_for(
-                        translator.translate_node_bulk(node_data, lang),
+                        translator.translate_node_bulk(digest_data, lang),
                         timeout=90.0
                     )
                 except asyncio.TimeoutError:
@@ -2385,8 +2390,28 @@ async def get_live_cricket():
         logger.error(f"Cricket Scraper Failed: {e}")
         return {"live": False, "message": "Cricket feed temporarily unavailable."}
 
-# --- RETENTION & HISTORY APIS ---
+# --- RESTORED ENDPOINTS ---
 
-# Save API removed
+@router.post("/api/v2/generate-exam")
+async def generate_exam(db: Session = Depends(get_db)):
+    """Restored Mock Test endpoint using high-performance fallback."""
+    try:
+        from src.analysis.exam_generator import ExamGenerator
+        generator = ExamGenerator()
+        exam_data = await generator.generate_from_news(db)
+        return {"status": "success", "exam": exam_data}
+    except Exception as e:
+        logger.error(f"Exam generation failed: {e}")
+        return {"status": "error", "message": "Failed to generate exam."}
+
+@router.get("/api/v2/universe/search")
+async def universe_search(q: str, db: Session = Depends(get_db)):
+    """Restored Globe/Universe Search for cross-border intelligence."""
+    try:
+        results = await universe_collector.search_global(q, db)
+        return {"status": "success", "results": results}
+    except Exception as e:
+        logger.error(f"Universe search failed: {e}")
+        return {"status": "error", "message": "Search unavailable."}
 
 # END OF DASHBOARD ROUTER
