@@ -35,8 +35,8 @@ def initialize_firebase():
                     if sj.startswith('"') and sj.endswith('"'):
                         sj = sj[1:-1]
                     
-                    # HEALING: Fix escaped newlines and escaped internal quotes (common paste errors)
-                    sj = sj.replace('\\n', '\n')
+                    # HEALING: Fix escaped internal quotes (common paste errors)
+                    # Note: We do NOT replace \\n here because json.loads() expects the escape sequence \n
                     sj = sj.replace('\\"', '"') 
                     
                     # Log the attempt for clarity (censoring secrets)
@@ -69,6 +69,8 @@ def initialize_firebase():
                     pk = private_key.strip()
                     if pk.startswith('"') and pk.endswith('"'):
                         pk = pk[1:-1]
+                    
+                    # For PEM loading, we DO need the actual newline characters
                     pk = pk.replace('\\n', '\n')
                     
                     # Ensure it has the correct BEGIN/END markers
@@ -105,10 +107,6 @@ def initialize_firebase():
 
         except Exception as e:
             logger.error(f"CRITICAL: Firebase initialization sequence failed: {e}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"CRITICAL: All Firebase init paths failed: {e}")
             return None
 
 def verify_token(id_token: str):
