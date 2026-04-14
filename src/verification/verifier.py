@@ -58,12 +58,13 @@ class VerificationEngine:
         global _CACHED_MODEL
         self.model = _CACHED_MODEL
         
-        # Check if SBERT is enabled via environment (default to True unless on constrained environment)
-        # Hugging Face usually provides 'SPACE_ID', we can use that for auto-detection
-        enable_sbert = os.getenv("ENABLE_SBERT", "true").lower() == "true"
+        # Check if SBERT is explicitly disabled (Useful for Railway/constrained environments)
+        disable_sbert = os.getenv("DISABLE_SBERT", "false").lower() == "true"
+        enable_sbert = os.getenv("ENABLE_SBERT", "true").lower() == "true" and not disable_sbert
+        
         is_huggingface = os.getenv("SPACE_ID") is not None
         
-        if is_huggingface and os.getenv("ENABLE_SBERT") is None:
+        if is_huggingface and os.getenv("ENABLE_SBERT") is None and not disable_sbert:
             logger.info("Running on Hugging Face Space. Disabling heavy Intelligence Engine to save RAM.")
             enable_sbert = False
 

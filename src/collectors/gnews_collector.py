@@ -106,6 +106,9 @@ class GNewsCollector:
                     if response.status_code == 200:
                         articles = response.json().get('articles', [])
                         total_saved += self._save_articles(articles, country)
+                    elif response.status_code == 403:
+                        logger.warning(f"GNews: API Quota reached for today (403). Skipping remaining targets. Reset at 00:00 UTC.")
+                        return total_saved # Stop immediately
                     else:
                         logger.error(f"GNews error for {country} ({endpoint}): {response.status_code} - {response.text}")
             except Exception as e:
