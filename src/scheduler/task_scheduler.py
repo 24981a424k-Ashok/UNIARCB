@@ -220,8 +220,22 @@ async def run_news_cycle():
 
     except Exception as e:
         logger.error(f"Error in news cycle: {e}")
-    finally:
         db.close()
+        # Persist last run to DB for health monitoring
+        db_cfg = SessionLocal()
+        try:
+            from src.database.models import SystemConfig
+            entry = db_cfg.query(SystemConfig).filter(SystemConfig.config_key == "last_news_cycle_run").first()
+            if not entry:
+                entry = SystemConfig(config_key="last_news_cycle_run")
+                db_cfg.add(entry)
+            entry.config_value = datetime.utcnow().isoformat()
+            db_cfg.commit()
+        except:
+            db_cfg.rollback()
+        finally:
+            db_cfg.close()
+
         logger.info("--------------------------------------------------")
         logger.info("EXECUTED SUCCESSFULLY | NEXT CYCLE IN 15 MINUTES")
         logger.info("--------------------------------------------------")

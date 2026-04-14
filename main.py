@@ -148,7 +148,7 @@ async def system_health():
             "last_article_time": last_article.created_at.isoformat() if last_article and hasattr(last_article, 'created_at') else "Unknown"
         },
         "scheduler": {
-            "last_run": LAST_CYCLE_RUN,
+            "last_run": db.query(SystemConfig).filter(SystemConfig.config_key == "last_news_cycle_run").first().config_value if db.query(SystemConfig).filter(SystemConfig.config_key == "last_news_cycle_run").first() else "Never",
             "interval": "15 Minutes"
         }
     }

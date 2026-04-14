@@ -415,6 +415,13 @@ async def api_bootstrap(
                         s for s in digest_data[sec]
                         if (s.get("category") or "").lower() in (cat_target, normalized_cat)
                     ]
+            
+            # LIVE FALLBACK for Category
+            if not digest_data.get("top_stories"):
+                live_cat = db.query(VerifiedNews).filter(VerifiedNews.category.ilike(f"%{category}%")).order_by(VerifiedNews.id.desc()).limit(15).all()
+                if live_cat:
+                    digest_data["top_stories"] = [normalize_article_data({"id": n.id, "title": n.headline or n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in live_cat]
+
         elif country and digest_data:
             target_name, match_keys, _ = normalize_country(country)
             countries_data = digest_data.get("countries", {})
@@ -423,11 +430,25 @@ async def api_bootstrap(
                 if k.lower() in match_keys:
                     country_stories = v
                     break
+            
+            # LIVE FALLBACK for Country Node
+            if not country_stories:
+                live_country = db.query(VerifiedNews).filter(VerifiedNews.country.in_(match_keys)).order_by(VerifiedNews.id.desc()).limit(15).all()
+                country_stories = [normalize_article_data({"id": n.id, "title": n.headline or n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in live_country]
+            
             if country_stories:
                 # NORMALIZE
                 for s in country_stories:
                     normalize_article_data(s)
                 digest_data["top_stories"] = country_stories
+
+        # --- LIVE FALLBACK for Main Dashboard ---
+        if not digest_data.get("top_stories") and not category and not country:
+            live_main = db.query(VerifiedNews).order_by(VerifiedNews.id.desc()).limit(15).all()
+            if live_main:
+                digest_data["top_stories"] = [normalize_article_data({"id": n.id, "title": n.headline or n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in live_main]
+                digest_data["is_system_initializing"] = False 
+
 
                 import asyncio
                 try:
