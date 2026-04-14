@@ -30,21 +30,25 @@ def initialize_firebase():
             service_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
             if service_json:
                 try:
-                    # Strip exterior quotes if accidentally included
-                    service_json = service_json.strip()
-                    if service_json.startswith('"') and service_json.endswith('"'):
-                        service_json = service_json[1:-1]
+                    # HEALING: Remove outer quotes if redundant
+                    sj = service_json.strip()
+                    if sj.startswith('"') and sj.endswith('"'):
+                        sj = sj[1:-1]
                     
-                    # Fix escaped newlines in the JSON string itself
-                    service_json = service_json.replace('\\n', '\n')
+                    # HEALING: Fix escaped newlines and escaped internal quotes (common paste errors)
+                    sj = sj.replace('\\n', '\n')
+                    sj = sj.replace('\\"', '"') 
                     
-                    cred_dict = json.loads(service_json)
+                    # Log the attempt for clarity (censoring secrets)
+                    logger.debug(f"Attempting Firebase init via JSON String (Length: {len(sj)})")
+                    
+                    cred_dict = json.loads(sj)
                     cred = credentials.Certificate(cred_dict)
                     _firebase_app = firebase_admin.initialize_app(cred)
-                    logger.info("Firebase initialized via JSON String in ENV.")
+                    logger.info("✅ Firebase Admin SDK initialized successfully via JSON String.")
                     return _firebase_app
                 except Exception as e:
-                    logger.warning(f"JSON String init failed: {e}")
+                    logger.warning(f"❌ JSON String init attempt failed: {e}")
 
             # 3. SECONDARY: Stable File
             cert_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "service-account.json")
