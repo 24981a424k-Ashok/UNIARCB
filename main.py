@@ -28,11 +28,13 @@ from src.delivery.web_dashboard import router as dashboard_router
 from src.delivery.user_retention import router as retention_router
 from src.delivery.admin_portal import router as admin_router
 
+from src.config.settings import DATA_DIR
+
 # Configure logging
 try:
-    log_dir = os.path.join("data", "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    logger.add(os.path.join(log_dir, "app.log"), rotation="500 MB", level="INFO")
+    log_dir = DATA_DIR / "logs"
+    log_dir.mkdir(exist_ok=True, parents=True)
+    logger.add(log_dir / "app.log", rotation="500 MB", level="INFO")
 except Exception as e:
     print(f"File logging disabled due to error: {e}")
 

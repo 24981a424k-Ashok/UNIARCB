@@ -64,7 +64,19 @@ FIREBASE_MESSAGING_SENDER_ID = os.getenv("FIREBASE_MESSAGING_SENDER_ID")
 FIREBASE_APP_ID = os.getenv("FIREBASE_APP_ID")
 
 # Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/news.db")
+_db_url = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/news.db")
+if _db_url.startswith("sqlite:///"):
+    db_path = _db_url.replace("sqlite:///", "")
+    if not os.path.isabs(db_path):
+        # Resolve relative to project root / data directory
+        if db_path.startswith("data/"):
+             db_path = db_path.replace("data/", "", 1)
+        DATABASE_URL = f"sqlite:///{DATA_DIR / db_path}"
+    else:
+        DATABASE_URL = _db_url
+else:
+    DATABASE_URL = _db_url
+
 VECTOR_DB_PATH = DATA_DIR / "vector_store.index"
 
 # News Setting
