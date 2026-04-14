@@ -116,6 +116,8 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown()
 
 
+app = FastAPI(title="AI News Intelligence Agent - Backend API", lifespan=lifespan)
+
 @app.get("/api/v2/system/health")
 async def system_health():
     """Diagnostic endpoint to verify if the 15-minute cycle is alive."""
@@ -150,8 +152,6 @@ async def system_health():
             "interval": "15 Minutes"
         }
     }
-
-app = FastAPI(title="AI News Intelligence Agent - Backend API", lifespan=lifespan)
 
 # --- CORS FOR ANDROID .AAB & DECOUPLED FRONTEND ---
 # Using allow_credentials=False is required by the CORS protocol when using allow_origins=["*"].
