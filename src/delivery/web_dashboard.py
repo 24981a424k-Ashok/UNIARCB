@@ -2088,7 +2088,6 @@ async def api_get_personal_news(interests: str = None, q: str = None, lang: str 
             for term in search_terms:
                 filters.append(VerifiedNews.title.ilike(f"%{term}%"))
                 filters.append(VerifiedNews.category.ilike(f"%{term}%"))
-                filters.append(VerifiedNews.impact_tags.ilike(f"%{term}%"))
                 filters.append(VerifiedNews.why_it_matters.ilike(f"%{term}%"))
                 
             articles = db.query(VerifiedNews).filter(
