@@ -35,6 +35,15 @@ async def run_news_cycle():
     initialize_firebase()
     db = SessionLocal()
     
+    # SQLite Protection: Enable WAL mode for better concurrency on Railway
+    if "sqlite" in str(db.bind.url).lower():
+        try:
+            from sqlalchemy import text
+            db.execute(text("PRAGMA journal_mode=WAL;"))
+            db.execute(text("PRAGMA synchronous=NORMAL;"))
+        except:
+            pass
+
     try:
         # 1. Collect
         logger.info("Step 1: Collection")
@@ -185,6 +194,11 @@ async def run_news_cycle():
             
             db.commit()
             logger.info(f"AI Intelligence applied to {len(unanalyzed)} articles.")
+        
+        # Cleanup
+        db.execute(text("DELETE FROM raw_news WHERE processed = 1 AND collected_at < :cutoff"), 
+                  {"cutoff": datetime.utcnow() - timedelta(days=2)})
+        db.commit()
 
         # 5. Final Digest Update (Full Intelligence)
         logger.info("Step 5: Updating Intelligence Dashboard...")
