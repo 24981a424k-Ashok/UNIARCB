@@ -30,22 +30,28 @@ def initialize_firebase():
             service_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
             if service_json:
                 try:
-                    # HEALING: Remove outer quotes if redundant
+                    # ULTIMATE HEALING: Remove outer quotes and handle double-escaping
                     sj = service_json.strip()
-                    if sj.startswith('"') and sj.endswith('"'):
-                        sj = sj[1:-1]
+                    if sj.startswith("'") and sj.endswith("'"): sj = sj[1:-1]
+                    if sj.startswith('"') and sj.endswith('"'): sj = sj[1:-1]
                     
-                    # HEALING: Fix escaped internal quotes (common paste errors)
-                    # Note: We do NOT replace \\n here because json.loads() expects the escape sequence \n
-                    sj = sj.replace('\\"', '"') 
+                    # Fix escaped internal quotes and handle common shell escape artifacts
+                    sj = sj.replace('\\"', '"')
                     
-                    # Log the attempt for clarity (censoring secrets)
-                    logger.debug(f"Attempting Firebase init via JSON String (Length: {len(sj)})")
-                    
-                    cred_dict = json.loads(sj)
+                    # Convert literal \n or \\n to actual newlines if json.loads fails initially
+                    try:
+                        cred_dict = json.loads(sj)
+                    except json.JSONDecodeError:
+                        import re
+                        # Attempt to fix escaped newlines that are breaking the JSON
+                        sj = re.sub(r'\\+n', '\n', sj)
+                        # Remove accidental double-escaped backslashes
+                        sj = sj.replace('\\\\', '\\')
+                        cred_dict = json.loads(sj)
+
                     cred = credentials.Certificate(cred_dict)
                     _firebase_app = firebase_admin.initialize_app(cred)
-                    logger.info("✅ Firebase Admin SDK initialized successfully via JSON String.")
+                    logger.info("✅ Firebase Admin SDK initialized successfully via Healed JSON String.")
                     return _firebase_app
                 except Exception as e:
                     logger.warning(f"❌ JSON String init attempt failed: {e}")
@@ -65,13 +71,16 @@ def initialize_firebase():
             private_key = os.getenv("FIREBASE_PRIVATE_KEY")
             if private_key:
                 try:
+                    import re
                     # Robust Key Cleaning (handles literal \n, quotes, and whitespace)
                     pk = private_key.strip()
-                    if pk.startswith('"') and pk.endswith('"'):
-                        pk = pk[1:-1]
+                    if pk.startswith('"') and pk.endswith('"'): pk = pk[1:-1]
+                    if pk.startswith("'") and pk.endswith("'"): pk = pk[1:-1]
                     
-                    # For PEM loading, we DO need the actual newline characters
-                    pk = pk.replace('\\n', '\n')
+                    # Aggressively replace any level of escaped 'n' with real newlines
+                    pk = re.sub(r'\\+n', '\n', pk)
+                    # Remove any accidental literal backslashes that might have been escaped
+                    pk = pk.replace('\\', '') if '-----' in pk else pk
                     
                     # Ensure it has the correct BEGIN/END markers
                     if "BEGIN PRIVATE KEY" not in pk:
