@@ -329,10 +329,18 @@ def start_scheduler():
     # helper to run async in background
     def _run_async_cycle():
         import asyncio
+        from datetime import datetime, timedelta
+        run_time = datetime.now()
+        next_run = run_time + timedelta(minutes=15)
+        logger.info(f"--- 🚀 NEWS CYCLE START: {run_time.strftime('%H:%M:%S')} (Next: {next_run.strftime('%H:%M:%S')}) ---")
+        
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(run_news_cycle())
         loop.close()
+        
+        logger.info(f"--- ✅ NEWS CYCLE SUCCESSFUL ---")
+        logger.info(f"--- 🕰️  STANDEBY: Next automated update at {next_run.strftime('%H:%M:%S')} ---")
 
     def _run_async_twitter():
         import asyncio
