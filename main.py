@@ -121,7 +121,7 @@ app = FastAPI(title="AI News Intelligence Agent - Backend API", lifespan=lifespa
 @app.get("/api/v2/system/health")
 async def system_health():
     """Diagnostic endpoint to verify if the 15-minute cycle is alive."""
-    from src.database.models import SessionLocal, VerifiedNews
+    from src.database.models import SessionLocal, VerifiedNews, SystemConfig
     from src.config.settings import DATABASE_URL
     import datetime
     
