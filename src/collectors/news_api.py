@@ -68,44 +68,44 @@ class NewsCollector:
                         continue # Try next key
                     logger.error(f"NewsAPI General failed: {e}")
 
-            # 2. Business Headlines
-            try:
-                res = client.get_top_headlines(language='en', category='business', country='in', page_size=30)
-                if res['status'] == 'ok':
-                    all_articles.extend(res.get('articles', []))
-            except Exception as e:
-                logger.warning(f"NewsAPI Business failed: {e}")
-
-            # 3. Sports Headlines
-            try:
-                res = client.get_top_headlines(language='en', category='sports', page_size=30)
-                if res['status'] == 'ok':
-                    all_articles.extend(res.get('articles', []))
-            except Exception as e:
-                logger.warning(f"NewsAPI Sports failed: {e}")
-
-            # 4. Target Countries
-            for country_code in ['jp', 'us']:
+                # 2. Business Headlines
                 try:
-                    res = client.get_top_headlines(
-                        language='en' if country_code != 'jp' else None,
-                        country=country_code,
-                        page_size=20
-                    )
+                    res = client.get_top_headlines(language='en', category='business', country='in', page_size=30)
                     if res['status'] == 'ok':
-                        articles = res.get('articles', [])
-                        for a in articles:
-                            a['target_country'] = country_code
-                        all_articles.extend(articles)
-                except Exception as ce:
-                    logger.warning(f"NewsAPI {country_code} failed: {ce}")
+                        all_articles.extend(res.get('articles', []))
+                except Exception as e:
+                    logger.warning(f"NewsAPI Business failed: {e}")
 
-            saved_count = self._save_articles(all_articles)
-            return saved_count
+                # 3. Sports Headlines
+                try:
+                    res = client.get_top_headlines(language='en', category='sports', page_size=30)
+                    if res['status'] == 'ok':
+                        all_articles.extend(res.get('articles', []))
+                except Exception as e:
+                    logger.warning(f"NewsAPI Sports failed: {e}")
+
+                # 4. Target Countries
+                for country_code in ['jp', 'us']:
+                    try:
+                        res = client.get_top_headlines(
+                            language='en' if country_code != 'jp' else None,
+                            country=country_code,
+                            page_size=20
+                        )
+                        if res['status'] == 'ok':
+                            articles = res.get('articles', [])
+                            for a in articles:
+                                a['target_country'] = country_code
+                            all_articles.extend(articles)
+                    except Exception as ce:
+                        logger.warning(f"NewsAPI {country_code} failed: {ce}")
+
+                saved_count = self._save_articles(all_articles)
+                return saved_count
             
-        except Exception as e:
-            logger.error(f"Error in NewsAPI collection cycle: {e}")
-            return 0
+            except Exception as e:
+                logger.error(f"Error in NewsAPI collection cycle: {e}")
+                return 0
 
     def _save_articles(self, articles: List[Dict[str, Any]]) -> int:
         session = SessionLocal()
