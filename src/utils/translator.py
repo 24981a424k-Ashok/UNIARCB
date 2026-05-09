@@ -2,6 +2,7 @@ import logging
 import random
 import json
 import asyncio
+import time
 from typing import List, Dict, Any, Union
 from openai import AsyncOpenAI
 from src.config import settings
