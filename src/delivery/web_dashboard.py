@@ -1237,6 +1237,7 @@ async def system_check(db: Session = Depends(get_db)):
 @router.get("/api/generate-exam")
 @router.post("/api/generate-exam")
 @router.get("/api/v2/generate-exam")
+@router.get("/api/v2/generate-exam")
 @router.post("/api/v2/generate-exam")
 async def generate_mock_exam(db: Session = Depends(get_db)):
     """Generate a quick mock test from recent news (Consolidated v1/v2) with 24h caching"""
@@ -2477,3 +2478,9 @@ async def universe_search(q: str, db: Session = Depends(get_db)):
         return {"status": "error", "message": "Search unavailable."}
 
 # END OF DASHBOARD ROUTER
+
+@router.get("/api/v2/admin/run-cycle")
+async def admin_trigger_cycle(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Manually triggers the background news cycle for stabilization testing."""
+    background_tasks.add_task(run_news_cycle)
+    return {"status": "success", "message": "News cycle triggered in background. Check Railway logs for progress."}

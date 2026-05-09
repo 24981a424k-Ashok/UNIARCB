@@ -147,58 +147,35 @@ class ExamGenerator:
                 
                 # Enhanced Ultimate Fallback List (minimum 5 varied questions)
                 fallback_questions = [
-                    {
-                        "id": 1,
-                        "type": "MCQ",
-                        "section": "General",
-                        "question": "Which organization releases the 'World Economic Outlook'?",
-                        "options": ["IMF", "World Bank", "WEF", "ADB"],
-                        "correct_answer": "IMF",
-                        "explanation": "The IMF releases the WEO report."
-                    },
-                    {
-                        "id": 2,
-                        "type": "MCQ",
-                        "section": "Science",
-                        "question": "Which NASA mission recently returned asteroid samples to Earth?",
-                        "options": ["OSIRIS-REx", "Juno", "Artemis", "New Horizons"],
-                        "correct_answer": "OSIRIS-REx",
-                        "explanation": "OSIRIS-REx returned samples from asteroid Bennu in 2023."
-                    },
-                    {
-                        "id": 3,
-                        "type": "MCQ",
-                        "section": "National",
-                        "question": "India's G20 Presidency theme was:",
-                        "options": ["One Earth One Family", "Digital India", "Vasudhaiva Kutumbakum", "Atmanirbhar Bharat"],
-                        "correct_answer": "Vasudhaiva Kutumbakum",
-                        "explanation": "The theme was Vasudhaiva Kutumbakum or One Earth One Family One Future."
-                    },
-                    {
-                        "id": 4,
-                        "type": "MCQ",
-                        "section": "Sports",
-                        "question": "Who won the Men's ODI World Cup 2023?",
-                        "options": ["India", "Australia", "England", "New Zealand"],
-                        "correct_answer": "Australia",
-                        "explanation": "Australia won their 6th title in 2023."
-                    },
-                    {
-                        "id": 5,
-                        "type": "MCQ",
-                        "section": "Economy",
-                        "question": "What is the primary focus of the PM-KUSUM scheme?",
-                        "options": ["Education", "Solar Energy for Farmers", "Railways", "Textiles"],
-                        "correct_answer": "Solar Energy for Farmers",
-                        "explanation": "PM-KUSUM focuses on solar energy and water security for farmers."
-                    }
+                    {"id": 1, "type": "MCQ", "section": "General", "question": "Which organization releases the 'World Economic Outlook'?", "options": ["IMF", "World Bank", "WEF", "ADB"], "correct_answer": "IMF", "explanation": "The IMF releases the WEO report."},
+                    {"id": 2, "type": "MCQ", "section": "Sports", "question": "Who won the Men's ODI World Cup 2023?", "options": ["India", "Australia", "England", "New Zealand"], "correct_answer": "Australia", "explanation": "Australia defeated India in the final."},
+                    {"id": 3, "type": "MCQ", "section": "Science", "question": "Which mission recently landed on the south pole of the Moon?", "options": ["Chandrayaan-2", "Chandrayaan-3", "Luna 25", "Artemis I"], "correct_answer": "Chandrayaan-3", "explanation": "India's Chandrayaan-3 was the first to land on the lunar south pole."},
+                    {"id": 4, "type": "MCQ", "section": "Economy", "question": "What is the current Repo Rate as per the latest RBI MPC meeting?", "options": ["6.25%", "6.50%", "6.75%", "6.00%"], "correct_answer": "6.50%", "explanation": "RBI has maintained the repo rate at 6.50% in recent cycles."},
+                    {"id": 5, "type": "MCQ", "section": "National", "question": "Who is the current President of India?", "options": ["Ram Nath Kovind", "Droupadi Murmu", "Jagdeep Dhankhar", "Yashwant Sinha"], "correct_answer": "Droupadi Murmu", "explanation": "Smt. Droupadi Murmu is the 15th President of India."},
+                    {"id": 6, "type": "MCQ", "section": "International", "question": "Which country recently joined NATO as its 31st member?", "options": ["Sweden", "Finland", "Ukraine", "Japan"], "correct_answer": "Finland", "explanation": "Finland officially joined NATO in April 2023."},
+                    {"id": 7, "type": "MCQ", "section": "Science", "question": "What is the primary objective of the Aditya-L1 mission?", "options": ["Lunar exploration", "Mars orbit", "Solar observation", "Venus atmosphere"], "correct_answer": "Solar observation", "explanation": "Aditya-L1 is India's first solar observatory mission."},
+                    {"id": 8, "type": "MCQ", "section": "Economy", "question": "Which Indian state has the highest GST collection currently?", "options": ["Gujarat", "Maharashtra", "Karnataka", "Tamil Nadu"], "correct_answer": "Maharashtra", "explanation": "Maharashtra consistently leads in GST collections in India."},
+                    {"id": 9, "type": "MCQ", "section": "Sports", "question": "Who holds the record for most centuries in ODI Cricket?", "options": ["Sachin Tendulkar", "Virat Kohli", "Ricky Ponting", "Rohit Sharma"], "correct_answer": "Virat Kohli", "explanation": "Virat Kohli surpassed Sachin Tendulkar's record in 2023."},
+                    {"id": 10, "type": "MCQ", "section": "Science", "question": "Which AI model was developed by Google DeepMind to predict protein structures?", "options": ["AlphaGo", "AlphaFold", "Gemini", "PaLM"], "correct_answer": "AlphaFold", "explanation": "AlphaFold has revolutionized biological research by predicting protein structures."},
+                    {"id": 11, "type": "MCQ", "section": "National", "question": "What is the name of India's indigenous payment gateway?", "options": ["Visa", "RuPay", "Mastercard", "Amex"], "correct_answer": "RuPay", "explanation": "RuPay is India's indigenous card payment network."},
+                    {"id": 12, "type": "MCQ", "section": "International", "question": "Where is the headquarters of the United Nations located?", "options": ["Geneva", "Paris", "New York", "Vienna"], "correct_answer": "New York", "explanation": "The UN headquarters is in New York City."},
+                    {"id": 13, "type": "MCQ", "section": "Economy", "question": "What does 'FDI' stand for in business?", "options": ["Fixed Deposit Investment", "Foreign Direct Investment", "Financial Data Integration", "First Direct Interest"], "correct_answer": "Foreign Direct Investment", "explanation": "FDI refers to investment made by a firm or individual in one country into business interests located in another country."},
+                    {"id": 14, "type": "MCQ", "section": "National", "question": "Which city is known as the 'Silicon Valley of India'?", "options": ["Hyderabad", "Pune", "Bengaluru", "Chennai"], "correct_answer": "Bengaluru", "explanation": "Bengaluru is the hub of India's information technology industry."},
+                    {"id": 15, "type": "MCQ", "section": "Science", "question": "What is the main gas found in the atmosphere of Venus?", "options": ["Oxygen", "Nitrogen", "Carbon Dioxide", "Hydrogen"], "correct_answer": "Carbon Dioxide", "explanation": "Venus has a thick atmosphere primarily composed of CO2."},
+                    {"id": 16, "type": "MCQ", "section": "Sports", "question": "In which city were the first Asian Games held?", "options": ["New Delhi", "Tokyo", "Bangkok", "Seoul"], "correct_answer": "New Delhi", "explanation": "The first Asian Games were held in New Delhi in 1951."},
+                    {"id": 17, "type": "MCQ", "section": "International", "question": "Which organization is responsible for global health monitoring?", "options": ["UNICEF", "WHO", "UNESCO", "WTO"], "correct_answer": "WHO", "explanation": "The World Health Organization (WHO) leads global health initiatives."},
+                    {"id": 18, "type": "MCQ", "section": "Science", "question": "Which element has the atomic number 1?", "options": ["Helium", "Hydrogen", "Carbon", "Oxygen"], "correct_answer": "Hydrogen", "explanation": "Hydrogen is the first element in the periodic table."},
+                    {"id": 19, "type": "MCQ", "section": "Economy", "question": "Who is the current Governor of the Reserve Bank of India?", "options": ["Urjit Patel", "Shaktikanta Das", "Raghuram Rajan", "Nirmala Sitharaman"], "correct_answer": "Shaktikanta Das", "explanation": "Shaktikanta Das is the 25th Governor of RBI."},
+                    {"id": 20, "type": "MCQ", "section": "National", "question": "Which article of the Indian Constitution deals with 'Equality before Law'?", "options": ["Article 14", "Article 17", "Article 21", "Article 32"], "correct_answer": "Article 14", "explanation": "Article 14 guarantees equality before the law."},
+                    {"id": 21, "type": "MCQ", "section": "Sports", "question": "Which team won the IPL 2024?", "options": ["CSK", "KKR", "SRH", "RCB"], "correct_answer": "KKR", "explanation": "Kolkata Knight Riders won the IPL 2024 title."},
+                    {"id": 22, "type": "MCQ", "section": "International", "question": "Which country is the largest producer of crude oil in the world?", "options": ["Saudi Arabia", "USA", "Russia", "Iraq"], "correct_answer": "USA", "explanation": "The USA has become the world's top producer of crude oil."},
+                    {"id": 23, "type": "MCQ", "section": "Science", "question": "What is the speed of light?", "options": ["300,000 km/s", "150,000 km/s", "450,000 km/s", "600,000 km/s"], "correct_answer": "300,000 km/s", "explanation": "Light travels at approximately 3 lakh km per second."},
+                    {"id": 24, "type": "MCQ", "section": "National", "question": "Which river is known as the 'Ganges of the South'?", "options": ["Godavari", "Cauvery", "Krishna", "Narmada"], "correct_answer": "Godavari", "explanation": "Godavari is often referred to as Dakshina Ganga."},
+                    {"id": 25, "type": "MCQ", "section": "General", "question": "What is the capital of Japan?", "options": ["Kyoto", "Osaka", "Tokyo", "Nagoya"], "correct_answer": "Tokyo", "explanation": "Tokyo is the current capital and most populous city of Japan."}
                 ]
                 
-                random.shuffle(fallback_questions)
-                for idx, q in enumerate(fallback_questions):
-                    q['id'] = idx + 1
-
                 return {
+                    "status": "success",
                     "title": f"Daily Mock Test (Smart Fallback) - {datetime.now().strftime('%d %b %Y')}",
                     "questions": fallback_questions
                 }
