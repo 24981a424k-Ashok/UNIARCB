@@ -1364,6 +1364,7 @@ async def get_state_news(payload: TranslateNodeRequest):
     }
 
 
+@router.post("/api/v2/translate-node")
 @router.post("/api/translate-node")
 async def translate_node(payload: TranslateNodeRequest):
     """
