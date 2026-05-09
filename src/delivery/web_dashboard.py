@@ -374,33 +374,35 @@ def get_fallback_image(seed: str, category: str = "General") -> str:
 def normalize_country(c):
     if not c: return None, [], 'english'
     mapping = {
-        "jp": ("Japan", ["japan", "jp"], "japanese"),
-        "us": ("USA", ["usa", "united states", "us", "america"], "english"),
-        "in": ("India", ["india", "in", "bharat"], "hindi"),
-        "gb": ("UK", ["uk", "united kingdom", "britain", "england"], "english"),
-        "ru": ("Russia", ["russia", "ru"], "russian"),
-        "de": ("Germany", ["germany", "de"], "german"),
-        "fr": ("France", ["france", "fr"], "french"),
-        "sg": ("Singapore", ["singapore", "sg"], "english"),
-        "cn": ("China", ["china", "ch", "cn", "zh"], "chinese"),
-        "ae": ("UAE", ["uae", "ae", "dubai", "abu dhabi"], "arabic")
+        "jp": ("Japan", ["japan", "jp"], "japanese", "jp"),
+        "us": ("USA", ["usa", "united states", "us", "america"], "english", "us"),
+        "in": ("India", ["india", "in", "bharat"], "hindi", "in"),
+        "gb": ("UK", ["uk", "united kingdom", "britain", "england"], "english", "gb"),
+        "ru": ("Russia", ["russia", "ru"], "russian", "ru"),
+        "de": ("Germany", ["germany", "de"], "german", "de"),
+        "fr": ("France", ["france", "fr"], "french", "fr"),
+        "sg": ("Singapore", ["singapore", "sg"], "english", "sg"),
+        "cn": ("China", ["china", "ch", "cn", "zh"], "chinese", "cn"),
+        "ae": ("UAE", ["uae", "ae", "dubai", "abu dhabi"], "arabic", "ae")
     }
     
     val = c.lower().strip()
     # Check if val is a code
     if val in mapping:
-        name, keys, lang = mapping[val]
+        name, keys, lang, code = mapping[val]
     else:
         # Check if val is a name
         name = c.capitalize()
         keys = [val]
         lang = "english"
-        for code, (cname, ckeys, clang) in mapping.items():
+        for c_code, (cname, ckeys, clang, ccode) in mapping.items():
             if val in ckeys:
-                name, keys, lang = cname, ckeys, clang
+                name, keys, lang, code = cname, ckeys, clang, ccode
                 break
+        else:
+            code = "global"
 
-    return name, list(set(keys)), lang
+    return name, list(set(keys)), lang, code
 
 
 # REMOVED: Root redirect/landing page (Moved to Frontend Server)
@@ -2034,7 +2036,7 @@ async def _update_student_cache_if_needed(db: Session, force: bool = False, coun
     """Manages the background aggregation of both internal verified news and external student-specific news feeds."""
     global _student_news_caches
     now = datetime.utcnow()
-    target_name, country_code, _ = normalize_country(country)
+    target_name, country_keys, _, actual_code = normalize_country(country)
     country_key = target_name.lower()
     
     cache = _student_news_caches.get(country_key, {"articles": [], "trends": {}, "last_updated": datetime(2000, 1, 1)})
@@ -2060,8 +2062,8 @@ async def _update_student_cache_if_needed(db: Session, force: bool = False, coun
     
     # 2. Fetch External News (Async)
     external_articles = []
-    if country_code and country_code.lower() != "global":
-        external_articles = await _fetch_newsdata_student_articles(db, country_code)
+    if actual_code and actual_code.lower() != "global":
+        external_articles = await _fetch_newsdata_student_articles(db, actual_code)
 
     # 3. Process and Categorize
     processed_articles = []

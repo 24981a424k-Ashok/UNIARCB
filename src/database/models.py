@@ -310,10 +310,10 @@ else:
     engine = create_engine(
         DATABASE_URL,
         pool_pre_ping=True,    # Checks if connection is alive before using it
-        pool_recycle=300,      # Refresh connections every 5 minutes
+        pool_recycle=1800,     # Refresh connections every 30 minutes
         pool_size=10,          # Base connection pool size
         max_overflow=20,       # Allow up to 20 extra connections during bursts
-        connect_args={"connect_timeout": 10}
+        connect_args={"connect_timeout": 30}
     )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

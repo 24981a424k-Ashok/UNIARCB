@@ -34,17 +34,7 @@ async def run_news_cycle():
         pass
 
     initialize_firebase()
-    db = SessionLocal()
     
-    # SQLite Protection: Enable WAL mode for better concurrency on Railway
-    if "sqlite" in str(db.bind.url).lower():
-        try:
-            from sqlalchemy import text
-            db.execute(text("PRAGMA journal_mode=WAL;"))
-            db.execute(text("PRAGMA synchronous=NORMAL;"))
-        except:
-            pass
-
     try:
         # 1. Collect
         logger.info("Step 1: Parallel Collection")
@@ -109,133 +99,114 @@ async def run_news_cycle():
         total_count = api_count + rss_count + t_count + s_count + gnews_count
         logger.info(f"✅ Collection complete. Total new articles: {total_count}")
         
-        if total_count == 0 and db.query(RawNews).count() == 0:
-            logger.warning("No news collected and DB is empty. Aborting cycle.")
-            return
-
         # 2. Verify
         logger.info("Step 2: Verification")
-        verifier = VerificationEngine()
-        unprocessed = db.query(RawNews).filter(RawNews.processed == False).all()
-        verified_count = verifier.verify_batch(db, [n.id for n in unprocessed])
-        logger.info(f"Verified {verified_count} articles.")
+        with SessionLocal() as db:
+            if total_count == 0 and db.query(RawNews).count() == 0:
+                logger.warning("No news collected and DB is empty. Aborting cycle.")
+                return
 
-        # 3. Instant Dashboard Refresh (Fresh news appears instantly)
+            verifier = VerificationEngine()
+            unprocessed = db.query(RawNews).filter(RawNews.processed == False).all()
+            verified_count = verifier.verify_batch(db, [n.id for n in unprocessed])
+            logger.info(f"Verified {verified_count} articles.")
+
+        # 3. Instant Dashboard Refresh
         logger.info("Step 3: Instant Dashboard Refresh...")
-        generator = DigestGenerator()
-        await generator.create_daily_digest(db)
-        logger.info("Dashboard updated with today's headlines (Preliminary).")
-
+        with SessionLocal() as db:
+            generator = DigestGenerator()
+            await generator.create_daily_digest(db)
+        
         # 4. Analyze (Deep Intelligence)
-        logger.info("Step 4: AI Analysis (Parallel Intelligence)")
-        analyzer = LLMAnalyzer()
-        unanalyzed = db.query(VerifiedNews).filter(VerifiedNews.impact_score == None).all()
-        
-        if unanalyzed:
-            # Separate Sports from other news for specialized analysis
-            sports_articles = []
-            other_articles = []
+        logger.info("Step 4: AI Analysis")
+        with SessionLocal() as db:
+            analyzer = LLMAnalyzer()
+            unanalyzed = db.query(VerifiedNews).filter(VerifiedNews.impact_score == None).all()
             
-            for n in unanalyzed:
-                is_likely_sports = False
-                if n.raw_news and n.raw_news.source_id:
-                    sid = n.raw_news.source_id.lower()
-                    if any(k in sid for k in ["sport", "espn", "football", "cricket"]):
-                        is_likely_sports = True
+            if unanalyzed:
+                sports_articles = []
+                other_articles = []
                 
-                if not is_likely_sports and n.title:
-                    title_lower = n.title.lower()
-                    if any(k in title_lower for k in ["match", "tournament", "scored", "wicket", "stadium", "athlete", "cricket", "football", "olympic", "fifa", "premier league"]):
-                        is_likely_sports = True
+                for n in unanalyzed:
+                    is_likely_sports = False
+                    if n.raw_news and n.raw_news.source_id:
+                        sid = n.raw_news.source_id.lower()
+                        if any(k in sid for k in ["sport", "espn", "football", "cricket"]):
+                            is_likely_sports = True
+                    
+                    if not is_likely_sports and n.title:
+                        title_lower = n.title.lower()
+                        if any(k in title_lower for k in ["match", "tournament", "scored", "wicket", "stadium", "athlete", "cricket", "football", "olympic", "fifa", "premier league"]):
+                            is_likely_sports = True
+                    
+                    article_data = {
+                        "title": n.title, 
+                        "content": n.content,
+                        "source_name": n.raw_news.source_name if n.raw_news else "Source"
+                    }
+                    
+                    if is_likely_sports:
+                        sports_articles.append((n, article_data))
+                    else:
+                        other_articles.append((n, article_data))
                 
-                article_data = {
-                    "title": n.title, 
-                    "content": n.content,
-                    "source_name": n.raw_news.source_name if n.raw_news else "Source"
-                }
-                
-                if is_likely_sports:
-                    sports_articles.append((n, article_data))
-                else:
-                    other_articles.append((n, article_data))
-            
-            # Helper to map analysis result to VerifiedNews model
-            def apply_analysis_to_news(news, result):
-                import json
-                # Save full raw analysis for later healing/UI extraction
-                news.analysis = result
-                
-                news.summary_bullets = result.get("summary_bullets", [])
-                news.why_it_matters = str(result.get("why_it_matters", ""))
-                who = result.get("who_is_affected", "")
-                if isinstance(who, dict):
-                    news.who_is_affected = json.dumps(who)
-                else:
-                    news.who_is_affected = str(who)
+                def apply_analysis_to_news(news, result):
+                    news.analysis = result
+                    news.summary_bullets = result.get("summary_bullets", [])
+                    news.why_it_matters = str(result.get("why_it_matters", ""))
+                    who = result.get("who_is_affected", "")
+                    if isinstance(who, dict): news.who_is_affected = json.dumps(who)
+                    else: news.who_is_affected = str(who)
+                    news.short_term_impact = str(result.get("short_term_impact", ""))
+                    news.long_term_impact = str(result.get("long_term_impact", ""))
+                    news.sentiment = str(result.get("sentiment", "Neutral"))
+                    news.impact_tags = result.get("impact_tags", [])
+                    news.bias_rating = str(result.get("bias_rating", "Neutral"))
+                    news.impact_score = int(result.get("impact_score", 5))
+                    
+                    if result.get("category") == "Sports" or news.category == "Sports":
+                        is_major_event = any(k in (news.title or "").lower() for k in ["olympic", "fifa", "world cup", "championship", "final"])
+                        if not is_major_event and news.impact_score > 6: news.impact_score = 6
+                    news.country = result.get("country") or result.get("primary_geography") or (news.raw_news.country if news.raw_news else None)
+                    news.category = result.get("category", "General")
 
-                news.short_term_impact = str(result.get("short_term_impact", ""))
-                news.long_term_impact = str(result.get("long_term_impact", ""))
-                news.sentiment = str(result.get("sentiment", "Neutral"))
-                news.impact_tags = result.get("impact_tags", [])
-                news.bias_rating = str(result.get("bias_rating", "Neutral"))
-                news.impact_score = int(result.get("impact_score", 5))
+                if sports_articles:
+                    sports_results = await analyzer.analyze_batch([a[1] for a in sports_articles], is_sports=True)
+                    for (news, _), result in zip(sports_articles, sports_results):
+                        apply_analysis_to_news(news, result)
+                        news.category = "Sports"
                 
-                # --- DIVERSITY REBALANCING: CAP SPORTS IMPACT ---
-                if result.get("category") == "Sports" or news.category == "Sports":
-                    is_major_event = any(k in (news.title or "").lower() for k in ["olympic", "fifa", "world cup", "championship", "final"])
-                    if not is_major_event and news.impact_score > 6:
-                         news.impact_score = 6 # Cap non-major sports at 6
-                news.country = result.get("country") or result.get("primary_geography") or (news.raw_news.country if news.raw_news else None)
+                if other_articles:
+                    other_results = await analyzer.analyze_batch([a[1] for a in other_articles], is_sports=False)
+                    for (news, _), result in zip(other_articles, other_results):
+                        apply_analysis_to_news(news, result)
                 
-                if news.raw_news and news.raw_news.source_id and news.raw_news.source_id.startswith("x-"):
-                    cat = "Twitter 𝕏"
-                else:
-                    cat = result.get("category", "General")
-                news.category = cat
-
-            # Run specialized Sports analysis
-            if sports_articles:
-                logger.info(f"Analyzing {len(sports_articles)} articles with Sports AI...")
-                sports_results = await analyzer.analyze_batch([a[1] for a in sports_articles], is_sports=True)
-                for (news, _), result in zip(sports_articles, sports_results):
-                    apply_analysis_to_news(news, result)
-                    news.category = "Sports"
+                db.commit()
+                logger.info(f"AI Intelligence applied to {len(unanalyzed)} articles.")
             
-            # Run standard analysis for others
-            if other_articles:
-                logger.info(f"Analyzing {len(other_articles)} articles with Standard AI...")
-                other_results = await analyzer.analyze_batch([a[1] for a in other_articles], is_sports=False)
-                for (news, _), result in zip(other_articles, other_results):
-                    apply_analysis_to_news(news, result)
-            
+            # Cleanup
+            db.execute(text("DELETE FROM raw_news WHERE processed = 1 AND collected_at < :cutoff"), 
+                      {"cutoff": datetime.utcnow() - timedelta(days=2)})
             db.commit()
-            logger.info(f"AI Intelligence applied to {len(unanalyzed)} articles.")
-        
-        # Cleanup
-        db.execute(text("DELETE FROM raw_news WHERE processed = 1 AND collected_at < :cutoff"), 
-                  {"cutoff": datetime.utcnow() - timedelta(days=2)})
-        db.commit()
 
-        # 5. Final Digest Update (Full Intelligence)
+        # 5. Final Digest Update
         logger.info("Step 5: Updating Intelligence Dashboard...")
-        await generator.create_daily_digest(db)
+        with SessionLocal() as db:
+            await generator.create_daily_digest(db)
 
-        # 6. Deliver & Notify (SMS Alerts for Breaking News)
+        # 6. Deliver
         logger.info("Step 6: Delivering Intelligence Notifications")
-        
-        # Trigger SMS for major breaking news (Impact >= 9)
-        newly_analyzed = db.query(VerifiedNews).filter(
-            VerifiedNews.impact_score >= 9,
-            VerifiedNews.created_at >= (datetime.utcnow() - timedelta(minutes=60))
-        ).all()
-        
-        for item in newly_analyzed:
-            await SmsNotifier.broadcast_breaking_news(db, item)
-
-        await check_topic_tracking(db)
+        with SessionLocal() as db:
+            newly_analyzed = db.query(VerifiedNews).filter(
+                VerifiedNews.impact_score >= 9,
+                VerifiedNews.created_at >= (datetime.utcnow() - timedelta(minutes=60))
+            ).all()
+            for item in newly_analyzed:
+                await SmsNotifier.broadcast_breaking_news(db, item)
+            await check_topic_tracking(db)
 
         # Update last run time on success
-        try:
+        with SessionLocal() as db:
             from src.database.models import SystemConfig
             entry = db.query(SystemConfig).filter(SystemConfig.config_key == "last_news_cycle_run").first()
             if not entry:
@@ -244,27 +215,21 @@ async def run_news_cycle():
             entry.config_value = datetime.utcnow().isoformat()
             db.commit()
             logger.info(f"Last successful run time updated: {entry.config_value}")
-        except Exception as e:
-            logger.error(f"Failed to update last run time on success: {e}")
-            db.rollback()
 
     except Exception as e:
         logger.error(f"Error in news cycle: {e}")
-        db.close()
-        # Persist last run to DB for health monitoring
-        db_cfg = SessionLocal()
-        try:
-            from src.database.models import SystemConfig
-            entry = db_cfg.query(SystemConfig).filter(SystemConfig.config_key == "last_news_cycle_run").first()
-            if not entry:
-                entry = SystemConfig(config_key="last_news_cycle_run")
-                db_cfg.add(entry)
-            entry.config_value = datetime.utcnow().isoformat()
-            db_cfg.commit()
-        except:
-            db_cfg.rollback()
-        finally:
-            db_cfg.close()
+        # Final emergency update of timestamp to prevent infinite retry loops if one article is toxic
+        with SessionLocal() as db_cfg:
+            try:
+                from src.database.models import SystemConfig
+                entry = db_cfg.query(SystemConfig).filter(SystemConfig.config_key == "last_news_cycle_run").first()
+                if not entry:
+                    entry = SystemConfig(config_key="last_news_cycle_run")
+                    db_cfg.add(entry)
+                entry.config_value = datetime.utcnow().isoformat()
+                db_cfg.commit()
+            except:
+                db_cfg.rollback()
 
         logger.info("--------------------------------------------------")
         logger.info("FINISHED WITH ERRORS | NEXT CYCLE IN 15 MINUTES")

@@ -110,32 +110,32 @@ class ExamGenerator:
                 system_prompt="You are an AI Current Affairs Exam Expert. Output ONLY valid JSON.",
                 user_prompt=prompt
             )
-            # Clean JSON if needed
-            response = response.replace("```json", "").replace("```", "").strip()
+            # Robust JSON cleanup
+            if "{" in response and "}" in response:
+                response = response[response.find("{"):response.rfind("}")+1]
             return json.loads(response)
         except Exception as e:
             logging.error(f"Exam Generation Error: {e}")
-            print(f"Exam Generation Error (LLM/Quota): {e}")
             
             # Fallback: Load from question bank
             try:
-                # Robust path handling
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                bank_path = os.path.join(base_dir, 'data', 'question_bank.json')
+                from src.config.settings import DATA_DIR
+                bank_path = DATA_DIR / 'question_bank.json'
                 
                 if os.path.exists(bank_path):
                     with open(bank_path, 'r', encoding='utf-8') as f:
                         all_questions = json.load(f)
                     
-                    # Randomly select 25 questions
-                    selected_questions = random.sample(all_questions, min(len(all_questions), 25))
+                    # Randomly select up to 25 questions
+                    count = min(len(all_questions), 25)
+                    selected_questions = random.sample(all_questions, count)
                     
                     # Re-index ids
                     for idx, q in enumerate(selected_questions):
                         q['id'] = idx + 1
                         
                     return {
-                        "title": f"Daily Mock Test - General Awareness - {datetime.now().strftime('%d %b %Y')}",
+                        "title": f"Daily Mock Test - Smart Fallback - {datetime.now().strftime('%d %b %Y')}",
                         "questions": selected_questions
                     }
                 else:
