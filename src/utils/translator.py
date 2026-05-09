@@ -331,15 +331,19 @@ class NewsTranslator:
                         response = await client.chat.completions.create(
                             model=batch_model,
                             messages=[
-                                {"role": "system", "content": f"Translate to {target_lang}. Return JSON: {{\"translated\": [ {{ \"id\": \"id\", \"t\": \"title\", \"b\": [\"bullet\"], \"w\": \"why\", \"a\": \"affected\" }} ]}}"},
-                                {"role": "user", "content": articles_text}
+                                {"role": "system", "content": f"You are a professional news journalist and master translator. Translate the following news articles to {target_lang} using high-quality regional phrasing. Return ONLY a valid JSON object with the structure: {{\"translated\": [ {{ \"id\": \"id\", \"t\": \"title\", \"b\": [\"bullet\"], \"w\": \"why\", \"a\": \"affected\" }} ]}}"},
+                                {"role": "user", "content": f"Translate these to {target_lang}:\n{articles_text}"}
                             ],
                             temperature=0.1,
                             timeout=30
                         )
                         raw_result = self._clean_json(response.choices[0].message.content.strip())
                         if raw_result and raw_result.get("translated"):
+                            logger.info(f"Successfully translated {len(raw_result.get('translated'))} items to {target_lang}")
                             return raw_result.get("translated")
+                        else:
+                            logger.warning(f"Translation JSON parse failed for {target_lang}. Response was not in expected format.")
+
                     except Exception as e:
                         key, k_idx = self._get_best_key()
                         if not key: break

@@ -10,6 +10,7 @@ from collections import defaultdict
 
 # --- CACHES & GLOBALS ---
 _student_news_caches = {}
+_EXAM_CACHE = {"data": None, "expires_at": 0}
 _bootstrap_cache = {}  # Format: {key: {"data": ..., "timestamp": ...}}
 _article_detail_cache = {} # Format: {key: {"data": ..., "timestamp": ...}}
 from typing import List, Optional, Dict, Any
@@ -1235,16 +1236,34 @@ async def system_check(db: Session = Depends(get_db)):
 @router.get("/api/v2/generate-exam")
 @router.post("/api/v2/generate-exam")
 async def generate_mock_exam(db: Session = Depends(get_db)):
-    """Generate a quick mock test from recent news (Consolidated v1/v2)"""
+    """Generate a quick mock test from recent news (Consolidated v1/v2) with 24h caching"""
+    global _EXAM_CACHE
+    now = time.time()
+    
+    # Return cached exam if valid
+    if _EXAM_CACHE["data"] and now < _EXAM_CACHE["expires_at"]:
+        logger.info("Serving mock exam from 24h cache.")
+        return {"status": "success", "exam": _EXAM_CACHE["data"]}
+        
     try:
         generator = ExamGenerator()
         exam_data = await generator.generate_from_news(db)
+        
         if isinstance(exam_data, dict) and exam_data.get("status") == "error":
              return exam_data
+             
+        # Cache for 24 hours
+        _EXAM_CACHE["data"] = exam_data
+        _EXAM_CACHE["expires_at"] = now + (24 * 3600)
+        logger.info("Generated new mock exam and cached for 24h.")
+        
         return {"status": "success", "exam": exam_data}
     except Exception as e:
-        logger.error(f"Exam generation failed: {e}")
-        return {"status": "error", "message": str(e)}
+        logger.error(f"Exam Generation Failed: {e}")
+        # Return fallback from cache even if expired if we have nothing else
+        if _EXAM_CACHE["data"]:
+            return {"status": "success", "exam": _EXAM_CACHE["data"]}
+        return {"status": "error", "message": f"Intelligence node busy: {str(e)}"}
 
 
 class ChatRequest(BaseModel):
@@ -1931,8 +1950,10 @@ async def api_get_student_news(category: str = 'All Updates', country: str = 'Gl
             "has_more": len(articles) > end
         }
     except Exception as e:
-        logger.error(f"Student news fetch failed: {e}")
-        return {"status": "error", "message": "Student Intelligence Node Offline."}
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Student news fetch failed: {e}\n{error_details}")
+        return {"status": "error", "message": f"Student Intelligence Node Offline: {str(e)}"}
 
 @router.get("/api/v2/get-student-trends")
 @router.get("/api/get-student-trends")
@@ -1960,9 +1981,8 @@ async def _fetch_newsdata_student_articles(db: Session, country_code: str):
     seen_urls = set()
     
     async with httpx.AsyncClient() as client:
-        for cat_name, q in fetch_cats.items():
+        async def fetch_cat(cat_name, q):
             try:
-                # Important: Include category=education to narrow results
                 params = {
                     "apikey": api_key,
                     "q": q,
@@ -1972,6 +1992,7 @@ async def _fetch_newsdata_student_articles(db: Session, country_code: str):
                 }
                 url = "https://newsdata.io/api/1/news"
                 resp = await client.get(url, params=params, timeout=15.0)
+                cat_results = []
                 if resp.status_code == 200:
                     data = resp.json()
                     for art in data.get("results", []):
@@ -1979,12 +2000,12 @@ async def _fetch_newsdata_student_articles(db: Session, country_code: str):
                         if art_url in seen_urls: continue
                         seen_urls.add(art_url)
                         
-                        results.append({
+                        cat_results.append({
                             "id": 0, # External marker
                             "title": art.get("title", "Student Update"),
                             "summary": art.get("description") or art.get("content", "")[:300] or "Intelligence report active.",
                             "category": cat_name,
-                            "tags": [f"#{cat_name.split(' ')[0]}", "#Live", f"#{country_code.upper()}"],
+                            "tags": [f"#{cat_name.split(' ')[0]}", "#Live", f"#{country_code.upper() if country_code else 'GLOBAL'}"],
                             "profiles": ["Student", "Aspirant"],
                             "url": art_url,
                             "source_name": (art.get("source_id") or "NewsData").title(),
@@ -1993,10 +2014,18 @@ async def _fetch_newsdata_student_articles(db: Session, country_code: str):
                             "trend_score": 90,
                             "urgency": "Medium"
                         })
-                await asyncio.sleep(0.5) # Prevent rate limits
+                    logger.info(f"Fetched {len(cat_results)} articles for {cat_name}")
+                return cat_results
             except Exception as e:
                 logger.error(f"NewsData fetch failed for {cat_name}: {e}")
-                
+                return []
+
+        # Concurrent fetching of all categories
+        tasks = [fetch_cat(cat, query) for cat, query in fetch_cats.items()]
+        results_lists = await asyncio.gather(*tasks)
+        for res_list in results_lists:
+            results.extend(res_list)
+            
     return results
 
 async def _update_student_cache_if_needed(db: Session, force: bool = False, country: str = "Global"):

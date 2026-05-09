@@ -80,7 +80,7 @@ class ExamGenerator:
         {news_text}
         
         RULES:
-        1. Generate exactly 15 questions.
+        1. Generate exactly 25 questions.
         2. Format: 
            - 9 MCQs (4 options)
            - 3 Statement-based (as MCQs with options like "Only 1", "Both 1 and 2")
@@ -127,8 +127,8 @@ class ExamGenerator:
                     with open(bank_path, 'r', encoding='utf-8') as f:
                         all_questions = json.load(f)
                     
-                    # Randomly select 15 questions
-                    selected_questions = random.sample(all_questions, min(len(all_questions), 15))
+                    # Randomly select 25 questions
+                    selected_questions = random.sample(all_questions, min(len(all_questions), 25))
                     
                     # Re-index ids
                     for idx, q in enumerate(selected_questions):
