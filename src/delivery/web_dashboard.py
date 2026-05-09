@@ -372,7 +372,7 @@ def get_fallback_image(seed: str, category: str = "General") -> str:
     # Using picsum seed for infinite deterministic unique images
     return f"https://picsum.photos/seed/{abs(hash_val)}/800/600"
 def normalize_country(c):
-    if not c: return None, [], 'english'
+    if not c: return "Global", [], "english", None
     mapping = {
         "jp": ("Japan", ["japan", "jp"], "japanese", "jp"),
         "us": ("USA", ["usa", "united states", "us", "america"], "english", "us"),
@@ -395,6 +395,7 @@ def normalize_country(c):
         name = c.capitalize()
         keys = [val]
         lang = "english"
+        code = None  # Initialize code to avoid UnboundLocalError
         for c_code, (cname, ckeys, clang, ccode) in mapping.items():
             if val in ckeys:
                 name, keys, lang, code = cname, ckeys, clang, ccode
@@ -1256,10 +1257,10 @@ async def generate_mock_exam(db: Session = Depends(get_db)):
         if isinstance(exam_data, dict) and exam_data.get("status") == "error":
              return exam_data
              
-        # Cache for 24 hours
+        # Cache for 1 hour
         _EXAM_CACHE["data"] = exam_data
-        _EXAM_CACHE["expires_at"] = now + (24 * 3600)
-        logger.info("Generated new mock exam and cached for 24h.")
+        _EXAM_CACHE["expires_at"] = now + 3600 
+        logger.info("Generated new mock exam and cached for 1h.")
         
         return {"status": "success", "exam": exam_data}
     except Exception as e:
@@ -1992,8 +1993,7 @@ async def _fetch_newsdata_student_articles(db: Session, country_code: str):
                     "apikey": api_key,
                     "q": q,
                     "country": country_code,
-                    "language": "en",
-                    "category": "education"
+                    "language": "en"
                 }
                 url = "https://newsdata.io/api/1/news"
                 resp = await client.get(url, params=params, timeout=15.0)

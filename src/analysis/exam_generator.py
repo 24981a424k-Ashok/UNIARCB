@@ -14,16 +14,24 @@ class ExamGenerator:
         self.llm = LLMAnalyzer()
 
     def get_recent_news(self, db: Session) -> List[Dict]:
-        """Fetch all verified news from the last 24 hours for total accuracy."""
+        """Fetch verified news, falling back to 7 days if last 24h is empty."""
         now = datetime.utcnow()
         last_24h = now - timedelta(hours=24)
         
-        # Perfection: Increased fetch to 30 items for better accuracy and selection
+        # Try last 24h first for maximum freshness
         news = db.query(VerifiedNews).filter(
             VerifiedNews.created_at >= last_24h,
             VerifiedNews.impact_score >= 4
-        ).order_by(VerifiedNews.impact_score.desc()).limit(30).all()
+        ).order_by(VerifiedNews.impact_score.desc()).limit(50).all()
         
+        if not news:
+            logger.info("No news in last 24h, falling back to 7 days.")
+            last_7d = now - timedelta(days=7)
+            news = db.query(VerifiedNews).filter(
+                VerifiedNews.created_at >= last_7d,
+                VerifiedNews.impact_score >= 3  # Lower score threshold for fallback
+            ).order_by(VerifiedNews.impact_score.desc()).limit(50).all()
+
         return [n.to_dict() for n in news]
 
 
@@ -80,13 +88,10 @@ class ExamGenerator:
         {news_text}
         
         RULES:
-        1. Generate exactly 25 questions.
+        1. Generate exactly 3 questions.
         2. Format: 
-           - 9 MCQs (4 options)
-           - 3 Statement-based (as MCQs with options like "Only 1", "Both 1 and 2")
-           - 2 Match the Following (formatted as MCQ: "Which pair is correctly matched?" or "Choose the correct sequence")
-           - 1 True/False
-        3. Sections: National, International, Economy, Science, Sports.
+           - 3 MCQs (4 options)
+        3. Sections: Mix of National, International, Economy, Science, or Sports.
         4. Output JSON format ONLY:
         {{
             "title": "Daily Mock Test - {datetime.now().strftime('%Y-%m-%d')}",
@@ -126,8 +131,8 @@ class ExamGenerator:
                     with open(bank_path, 'r', encoding='utf-8') as f:
                         all_questions = json.load(f)
                     
-                    # Randomly select up to 25 questions
-                    count = min(len(all_questions), 25)
+                    # Randomly select up to 3 questions
+                    count = min(len(all_questions), 3)
                     selected_questions = random.sample(all_questions, count)
                     
                     # Re-index ids
@@ -177,6 +182,6 @@ class ExamGenerator:
                 return {
                     "status": "success",
                     "title": f"Daily Mock Test (Smart Fallback) - {datetime.now().strftime('%d %b %Y')}",
-                    "questions": fallback_questions
+                    "questions": random.sample(fallback_questions, 3)
                 }
 

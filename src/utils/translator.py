@@ -35,7 +35,8 @@ class NewsTranslator:
         # NLLB Language Mapping
         self.nllb_map = {
             "Telugu": "tel_Telu", "Hindi": "hin_Deva", "Tamil": "tam_Taml",
-            "Kannada": "kan_Knda", "Malayalam": "mal_Mlym", "Arabic": "arb_Arab",
+            "Kannada": "kan_Knda", "Malayalam": "mal_Mlym", "Marathi": "mar_Deva",
+            "Bengali": "ben_Beng", "Gujarati": "guj_Gujr", "Arabic": "arb_Arab",
             "Japanese": "jpn_Jpan", "Spanish": "spa_Latn", "French": "fra_Latn",
             "German": "deu_Latn", "Russian": "rus_Cyrl", "Chinese": "zho_Hans",
             "Korean": "kor_Hang", "Portuguese": "por_Latn", "Turkish": "tur_Latn"
@@ -233,9 +234,12 @@ class NewsTranslator:
                         self._mark_key_limited(key, is_dead=is_quota)
                     continue
 
-        # 2. FINAL LAYER: NLLB EMERGENCY FALLBACK
-        logger.warning(f"LLM layers failed for {target_lang}. Using NLLB fallback.")
-        return await self.translate_nllb(text, target_lang)
+        # 2. FINAL LAYER: NLLB EMERGENCY FALLBACK (Zero cost, infinite availability)
+        if target_lang in self.nllb_map:
+            logger.warning(f"LLM layers failed for {target_lang}. Using NLLB fallback.")
+            return await self.translate_nllb(text, target_lang)
+        
+        return text
 
 
     async def translate_stories(self, stories: List[Dict[str, Any]], target_lang: str) -> List[Dict[str, Any]]:
