@@ -216,6 +216,10 @@ async def run_news_cycle():
             db.commit()
             logger.info(f"Last successful run time updated: {entry.config_value}")
 
+        # 7. Pre-Translate (Optimal Solution for zero lag)
+        logger.info("Step 7: Background Pre-translation (Top 5 Languages)")
+        await pre_translate_top_stories()
+
     except Exception as e:
         logger.error(f"Error in news cycle: {e}")
         # Final emergency update of timestamp to prevent infinite retry loops if one article is toxic
@@ -288,6 +292,51 @@ async def check_topic_tracking(db: Session):
                     
     except Exception as e:
         logger.error(f"Error in topic tracking check: {e}")
+
+
+async def pre_translate_top_stories():
+    """
+    Perform background translation for the top 10 stories into major languages.
+    This ensures that when users open the app in these languages, the content is INSTANT.
+    """
+    try:
+        from src.database.models import DailyDigest, SessionLocal
+        from src.utils.translator import NewsTranslator
+        
+        target_langs = ["Hindi", "Telugu", "Tamil", "Kannada", "Malayalam"]
+        translator = NewsTranslator()
+        
+        with SessionLocal() as db:
+            latest = db.query(DailyDigest).filter(DailyDigest.is_published == True).order_by(DailyDigest.date.desc()).first()
+            if not latest or not latest.content_json:
+                logger.warning("No digest found for pre-translation.")
+                return
+
+            top_stories = latest.content_json.get("top_stories", [])[:10]
+            if not top_stories:
+                logger.warning("Top stories empty, skipping pre-translation.")
+                return
+            
+            # Prepare data structure for translator
+            node_data = {"stories": top_stories}
+            
+            logger.info(f"Pre-translating {len(top_stories)} stories into {len(target_langs)} languages...")
+            
+            # Run translations sequentially to avoid overwhelming API rate limits
+            for lang in target_langs:
+                try:
+                    logger.info(f"Pre-translating to {lang}...")
+                    # translate_node_bulk handles its own internal caching and DB updates
+                    await translator.translate_node_bulk(node_data, lang)
+                    # Small rest between languages
+                    await asyncio.sleep(2) 
+                except Exception as lang_err:
+                    logger.error(f"Pre-translation failed for {lang}: {lang_err}")
+                    
+            logger.info("✅ Background Pre-translation complete.")
+
+    except Exception as e:
+        logger.error(f"Global Pre-translation error: {e}")
 
 
 async def run_twitter_only_cycle():

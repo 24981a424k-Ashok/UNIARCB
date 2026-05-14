@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from src.database.models import VerifiedNews, DailyDigest
 from src.analysis.llm_analyzer import LLMAnalyzer
 
+logger = logging.getLogger(__name__)
+
 class ExamGenerator:
     def __init__(self):
         self.llm = LLMAnalyzer()

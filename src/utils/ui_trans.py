@@ -839,5 +839,14 @@ def get_ui_translations(lang: str) -> dict:
     if not lang:
         return UI_TRANSLATIONS["english"]
     lang = lang.lower().strip()
+    
+    # Map short codes to full names
+    mapping = {
+        "en": "english", "hi": "hindi", "te": "telugu", "ta": "tamil",
+        "ka": "kannada", "ml": "malayalam", "mr": "marathi", "bn": "bengali",
+        "gu": "gujarati", "ar": "arabic", "fr": "french", "es": "spanish"
+    }
+    lang = mapping.get(lang, lang)
+    
     return UI_TRANSLATIONS.get(lang, UI_TRANSLATIONS.get("english"))
 
