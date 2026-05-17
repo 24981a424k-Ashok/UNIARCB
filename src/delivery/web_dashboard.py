@@ -253,12 +253,14 @@ def normalize_article_data(data: dict, strip_large_fields: bool = False):
         data["source_name"] = re.sub('<[^<]+?>', '', str(data["source_name"]))
     
     # NEW: Robust fallback for empty Why It Matters / Who Affected
+    title_str = str(data.get("title") or "this event")[:40]
+    cat_str = str(data.get("category") or "Industry")
     if not data.get("why") or len(str(data["why"]).strip()) < 10:
-        data["why"] = f"Strategic advancement in {article_cat} intelligence. Analysts examine the long-term potential of '{data.get('title', 'this event')[:40]}...' to redefine local standards."
+        data["why"] = f"Strategic advancement in {cat_str} intelligence. Analysts examine the long-term potential of '{title_str}...' to redefine local standards."
         data["why_it_matters"] = data["why"]
         
     if not data.get("affected") or len(str(data["affected"]).strip()) < 10:
-        data["affected"] = f"Policy makers, industry specialized groups, and regional stakeholders monitoring '{article_cat}' developments."
+        data["affected"] = f"Policy makers, industry specialized groups, and regional stakeholders monitoring '{cat_str}' developments."
         data["who_is_affected"] = data["affected"]
 
 
