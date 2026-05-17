@@ -242,8 +242,8 @@ def normalize_article_data(data: dict, strip_large_fields: bool = False):
     bullets_text = "\n".join([f"• {b}" for b in data.get(bullets_key, [])])
     data["content"] = f"### {data.get('title', 'Intelligence report')}\n\n**Summary:**\n{bullets_text}\n\n---\n*Source: {data.get('official_url') or data.get('url') or 'Global Intel'}*"
     
-    # Force null for images as per user request (Simplified UI)
-    data["image_url"] = None
+    # Force null for images as per user request (Simplified UI) - REMOVED to restore images
+    # data["image_url"] = None
     
     # NEW: Strip HTML from title and source to prevent code leaks
     import re
