@@ -20,6 +20,20 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from loguru import logger
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from src.config.settings import SENTRY_DSN
+
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[FastApiIntegration()],
+        traces_sample_rate=1.0,
+        send_default_pii=True
+    )
+    logger.info("Sentry SDK initialized successfully.")
+else:
+    logger.info("Sentry DSN not configured. Sentry telemetry is bypassed, relying fully on Resend Exception Alerts.")
 
 # Silence noisy external libraries
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -125,6 +139,44 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI News Intelligence Agent - Backend API", lifespan=lifespan)
+
+import traceback
+from fastapi.responses import JSONResponse
+from src.services.resend_email import ResendEmailManager
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    # Retrieve exception details
+    error_type = type(exc).__name__
+    error_msg = str(exc)
+    traceback_str = traceback.format_exc()
+    context_details = f"Method: {request.method} | URL: {request.url}"
+    
+    # 1. Log locally
+    logger.exception(f"Unhandled exception caught on endpoint: {exc}")
+    
+    # 2. Dispatch via our custom Resend warning engine (run in background to avoid hanging the client)
+    try:
+        email_mgr = ResendEmailManager()
+        # Trigger sending the premium HTML developer email alert
+        email_mgr.send_developer_error_alert(
+            error_type=error_type,
+            error_msg=error_msg,
+            traceback_str=traceback_str,
+            context_details=context_details
+        )
+    except Exception as email_err:
+        logger.error(f"Failed to dispatch developer alert email: {email_err}")
+        
+    # 3. Return a premium production-safe JSON response to prevent API locks
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "message": "A critical server error occurred. The developer team has been instantly notified.",
+            "error_type": error_type
+        }
+    )
 
 @app.get("/api/v2/system/health")
 async def system_health():

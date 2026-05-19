@@ -91,6 +91,12 @@ if _env_db_url.startswith("sqlite:///"):
         DATABASE_URL = f"sqlite:///{_abs_db_path.as_posix()}"
     else:
         DATABASE_URL = _env_db_url
+elif _env_db_url.startswith("postgresql://") or _env_db_url.startswith("postgresql+psycopg2://"):
+    # SQLAlchemy requires postgresql+psycopg2:// to connect using psycopg2
+    if _env_db_url.startswith("postgresql://"):
+        DATABASE_URL = _env_db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    else:
+        DATABASE_URL = _env_db_url
 else:
     # Use default
     _default_db = (DATA_DIR / "news.db").resolve().absolute()
@@ -136,3 +142,14 @@ if not ADMIN_PASSWORD:
 
 # Admin JWT Secret — generates a random one if not set, but should be fixed in production
 ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", secrets.token_hex(32) if 'secrets' in dir() else "change_me_in_env")
+
+# Redis Configuration
+REDIS_URL = os.getenv("REDIS_URL", "")
+
+# Resend Email Configuration
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+RESEND_SENDER = os.getenv("RESEND_SENDER", "UniArc Intelligence <onboarding@resend.dev>")
+DEVELOPER_ALERT_EMAIL = os.getenv("DEVELOPER_ALERT_EMAIL", "teamuniarc@yahoo.com")
+
+# Sentry Configuration
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")

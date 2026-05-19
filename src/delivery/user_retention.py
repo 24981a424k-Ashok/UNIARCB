@@ -273,7 +273,7 @@ async def update_phone(payload: PhoneUpdateRequest, db: Session = Depends(get_db
 
 @router.post("/track_topic")
 async def track_topic(payload: TrackTopicRequest, db: Session = Depends(get_db)):
-    """Permanent topic tracking for 30 days via SMS."""
+    """Permanent topic tracking for 30 days via email and SMS."""
     from src.delivery.notifications import NotificationManager
     
     # Ensure user exists
@@ -283,10 +283,22 @@ async def track_topic(payload: TrackTopicRequest, db: Session = Depends(get_db))
         db.add(user)
         db.commit()
         db.refresh(user)
+
+    # Sync email from Firebase Auth if not set locally
+    if not user.email:
+        try:
+            from firebase_admin import auth as firebase_auth
+            fb_user = firebase_auth.get_user(payload.firebase_uid)
+            if fb_user and fb_user.email:
+                user.email = fb_user.email
+                db.commit()
+                logger.info(f"[FirebaseSync] Synced email {user.email} for user {user.id}")
+        except Exception as fe:
+            logger.warning(f"[FirebaseSync] Could not fetch user from Firebase Auth: {fe}")
         
-    # NEW: Check if phone number exists for SMS tracking
-    if not user.phone:
-        return {"status": "NEED_PHONE", "message": "Phone number required for SMS alerts."}
+    # Check if communication channel exists (allow either phone or email)
+    if not user.phone and not user.email:
+        return {"status": "NEED_PHONE", "message": "Email or phone number is required for intelligence alerts."}
         
     # Get article keywords
     article_id_clean = payload.article_id
@@ -336,12 +348,69 @@ async def track_topic(payload: TrackTopicRequest, db: Session = Depends(get_db))
         db.add(track)
         db.commit()
     
+    # Send Email Confirmation if email exists
+    if user.email:
+        try:
+            from src.services.resend_email import ResendEmailManager
+            email_mgr = ResendEmailManager()
+            subject = f"📡 Track Activated: {keywords[0]}"
+            html_body = email_mgr.build_subscription_confirmation_html(keywords, user.email)
+            email_mgr.send_email(user.email, subject, html_body)
+        except Exception as ee:
+            logger.exception(f"[Resend] Failed to send activation email: {ee}")
+
     # Send SMS Confirmation if phone exists
     if user.phone:
-        article_title_final = article_title if 'article_title' in locals() else f"Intelligence on {keywords[0]}"
-        NotificationManager.send_sms(
-            user.phone, 
-            f"📡 AI AGENT: Now tracking '{article_title_final}'. You will receive SMS alerts for related intelligence updates over the next 30 days."
-        )
+        try:
+            article_title_final = article_title if 'article_title' in locals() else f"Intelligence on {keywords[0]}"
+            NotificationManager.send_sms(
+                user.phone, 
+                f"📡 AI AGENT: Now tracking '{article_title_final}'. You will receive SMS alerts for related intelligence updates over the next 30 days."
+            )
+        except Exception as se:
+            logger.warning(f"[Twilio] Failed to send SMS activation: {se}")
 
     return {"status": "success", "message": "Topic tracked for 30 days"}
+
+
+@router.post("/send_daily_digest_email")
+async def manual_send_daily_digest_email(db: Session = Depends(get_db)):
+    """
+    Broadcasts the daily intelligence email digest containing the latest 3-5 verified articles
+    to all registered users with email addresses.
+    """
+    from src.services.resend_email import ResendEmailManager
+    
+    # Fetch latest 3-5 verified articles
+    articles = db.query(VerifiedNews).order_by(VerifiedNews.created_at.desc()).limit(5).all()
+    if not articles:
+        return {"status": "error", "message": "No news articles found in the database to compile a digest."}
+        
+    # Fetch all users with email
+    users = db.query(User).filter(User.email != None).all()
+    if not users:
+        return {"status": "success", "message": "No users with registered email addresses found."}
+        
+    email_mgr = ResendEmailManager()
+    success_count = 0
+    fail_count = 0
+    
+    for u in users:
+        # Build custom beautiful newsletter for each user
+        html_content = email_mgr.build_daily_digest_html(articles, u.email)
+        subject = "📡 Your Daily UniArc Intelligence Briefing"
+        sent = email_mgr.send_email(u.email, subject, html_content)
+        if sent:
+            success_count += 1
+        else:
+            fail_count += 1
+            
+    return {
+        "status": "success",
+        "message": f"Daily digest broadcast complete.",
+        "recipients_queried": len(users),
+        "successful_sends": success_count,
+        "failed_sends": fail_count,
+        "articles_included": len(articles)
+    }
+

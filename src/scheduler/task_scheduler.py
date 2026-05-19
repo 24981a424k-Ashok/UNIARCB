@@ -185,7 +185,7 @@ async def run_news_cycle():
                 logger.info(f"AI Intelligence applied to {len(unanalyzed)} articles.")
             
             # Cleanup
-            db.execute(text("DELETE FROM raw_news WHERE processed = 1 AND collected_at < :cutoff"), 
+            db.execute(text("DELETE FROM raw_news WHERE processed = true AND collected_at < :cutoff"), 
                       {"cutoff": datetime.utcnow() - timedelta(days=2)})
             db.commit()
 
@@ -222,6 +222,18 @@ async def run_news_cycle():
 
     except Exception as e:
         logger.error(f"Error in news cycle: {e}")
+        try:
+            import traceback
+            from src.services.resend_email import ResendEmailManager
+            email_mgr = ResendEmailManager()
+            email_mgr.send_developer_error_alert(
+                error_type=type(e).__name__,
+                error_msg=str(e),
+                traceback_str=traceback.format_exc(),
+                context_details="Background Task: run_news_cycle"
+            )
+        except Exception as alert_err:
+            logger.error(f"Failed to dispatch background error email: {alert_err}")
         # Final emergency update of timestamp to prevent infinite retry loops if one article is toxic
         with SessionLocal() as db_cfg:
             try:
@@ -240,15 +252,14 @@ async def run_news_cycle():
         logger.info("--------------------------------------------------")
 
 async def check_topic_tracking(db: Session):
-    """Check for new articles matching tracked topics and notify users."""
+    """Check for new articles matching tracked topics and notify users via SMS and/or email."""
     try:
         from src.database.models import TopicTracking, VerifiedNews, User, TrackNotification
         from src.delivery.notifications import NotificationManager
+        from src.services.resend_email import ResendEmailManager
         from datetime import datetime, timedelta
         
-        # Look for tracks created or updated recently
-        # In a real system, we'd track 'last_notified_at'
-        # For now, look for news from the last hour that matches active tracks
+        # Look for news from the last hour that matches active tracks
         one_hour_ago = datetime.utcnow() - timedelta(hours=1)
         new_articles = db.query(VerifiedNews).filter(VerifiedNews.created_at > one_hour_ago).all()
         
@@ -256,13 +267,16 @@ async def check_topic_tracking(db: Session):
             return
 
         tracks = db.query(TopicTracking).filter(
-            TopicTracking.notify_sms == True,
             TopicTracking.expires_at > datetime.utcnow()
         ).all()
         
+        email_mgr = ResendEmailManager()
+        
         for track in tracks:
             user = track.user
-            if not user or not user.phone:
+            if not user:
+                continue
+            if not user.phone and not user.email:
                 continue
             
             for article in new_articles:
@@ -281,17 +295,34 @@ async def check_topic_tracking(db: Session):
                     ).first()
                     
                     if not already_notified:
-                        logger.info(f"Topic Match Found! Notifying {user.phone} for '{article.title}'")
-                        await NotificationManager.send_sms(
-                            user.phone, 
-                            f"Tracked Intelligence: '{article.title}' matches your search. Read more: {article.url}"
-                        )
+                        logger.info(f"Topic Match Found! Notifying user {user.id} for '{article.title}'")
+                        
+                        # Send SMS if phone exists
+                        if user.phone:
+                            try:
+                                await NotificationManager.send_sms(
+                                    user.phone, 
+                                    f"Tracked Intelligence: '{article.title}' matches your search. Read more: {article.url}"
+                                )
+                            except Exception as se:
+                                logger.warning(f"Failed to send tracking SMS: {se}")
+                                
+                        # Send Email if email exists
+                        if user.email:
+                            try:
+                                subject = f"📡 Intelligence Alert: {article.title}"
+                                html_body = email_mgr.build_topic_tracking_html(article, user.email)
+                                email_mgr.send_email(user.email, subject, html_body)
+                            except Exception as ee:
+                                logger.warning(f"Failed to send tracking Email: {ee}")
+                                
                         # RECORD NOTIFICATION
                         db.add(TrackNotification(user_id=user.id, news_id=article.id))
                         db.commit()
                     
     except Exception as e:
         logger.error(f"Error in topic tracking check: {e}")
+
 
 
 async def pre_translate_top_stories():
@@ -405,7 +436,46 @@ def start_scheduler():
         except Exception as e:
             logger.error(f"Data retention failed: {e}")
 
-    # FULL NEWS CYCLE (Every 3 minutes for high-speed updates)
+    def _run_daily_digest_email():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def run_email_digest():
+            logger.info("--- 📧 DAILY NEWS DIGEST EMAIL JOB START ---")
+            with SessionLocal() as db:
+                from src.services.resend_email import ResendEmailManager
+                from src.database.models import User
+                
+                # Fetch latest 3-5 verified articles
+                articles = db.query(VerifiedNews).order_by(VerifiedNews.created_at.desc()).limit(5).all()
+                if not articles:
+                    logger.warning("No articles found to send daily digest email.")
+                    return
+                
+                users = db.query(User).filter(User.email != None).all()
+                if not users:
+                    logger.warning("No users with emails registered.")
+                    return
+                
+                email_mgr = ResendEmailManager()
+                success_count = 0
+                
+                for u in users:
+                    try:
+                        html_content = email_mgr.build_daily_digest_html(articles, u.email)
+                        subject = "📡 Your Daily UniArc Intelligence Briefing"
+                        sent = email_mgr.send_email(u.email, subject, html_content)
+                        if sent:
+                            success_count += 1
+                    except Exception as ex:
+                        logger.error(f"Failed to send daily digest email to {u.email}: {ex}")
+                logger.info(f"--- 📧 DAILY NEWS DIGEST EMAIL JOB SUCCESSFUL (Sent to {success_count}/{len(users)} users) ---")
+                
+        loop.run_until_complete(run_email_digest())
+        loop.close()
+
+    # FULL NEWS CYCLE (Every 15 minutes for updates)
     scheduler.add_job(
         _run_async_cycle, 
         'interval', 
@@ -430,6 +500,18 @@ def start_scheduler():
         coalesce=True
     )
 
+    # Daily Intelligence Email Digest (Everyday at 8:00 AM Asia/Kolkata)
+    scheduler.add_job(
+        _run_daily_digest_email,
+        'cron',
+        hour=8,
+        minute=0,
+        timezone='Asia/Kolkata',
+        id='daily_intelligence_email_digest',
+        misfire_grace_time=3600,
+        coalesce=True
+    )
+
     # DATA RETENTION (Every 24 hours at 3 AM)
     scheduler.add_job(
         _run_data_retention,
@@ -443,3 +525,4 @@ def start_scheduler():
     
     scheduler.start()
     return scheduler
+

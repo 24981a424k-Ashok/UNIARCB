@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from typing import List, Optional
-from sqlalchemy import create_engine, Column, Integer, String, Text, Float, DateTime, Boolean, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, Float, DateTime, Boolean, ForeignKey, JSON, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from sqlalchemy import event
@@ -32,6 +32,10 @@ class RawNews(Base):
 
 class VerifiedNews(Base):
     __tablename__ = "verified_news"
+    __table_args__ = (
+        Index('idx_verified_news_query', 'country', 'category', 'created_at'),
+        Index('idx_verified_news_impact', 'country', 'impact_score', 'created_at'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     raw_news_id = Column(Integer, ForeignKey("raw_news.id"))
@@ -48,21 +52,19 @@ class VerifiedNews(Base):
     sub_category = Column(String, nullable=True, index=True) # e.g. "Scholarships", "Exams"
     country = Column(String, nullable=True, index=True)
     credibility_score = Column(Float)
-    impact_score = Column(Integer, index=True) # 1-10
+    impact_score = Column(Integer) # 1-10
     why_it_matters = Column(Text)
     who_is_affected = Column(Text, nullable=True)
     short_term_impact = Column(Text, nullable=True)
     long_term_impact = Column(Text, nullable=True)
     sentiment = Column(String)
     lang = Column(String, default='english', index=True) # Source language
-    image_url_manual = Column(String, nullable=True) # Manually uploaded or custom URL
-    access_link = Column(String, nullable=True) # Button link for scholarships/jobs
     
     is_fake = Column(Boolean, default=False)
     flag_count = Column(Integer, default=0)
     
     published_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
     
     # New Perfection Fields
     translation_cache = Column(JSON, default=dict) # {lang: {title, why, impacted}}
@@ -74,8 +76,6 @@ class VerifiedNews(Base):
     @property
     def image_url(self) -> Optional[str]:
         """Backward compatibility for templates and logic expecting image_url attribute."""
-        if self.image_url_manual:
-            return self.image_url_manual
         if self.raw_news and self.raw_news.url_to_image:
             return self.raw_news.url_to_image
         return None
@@ -115,9 +115,7 @@ class VerifiedNews(Base):
             "sentiment": self.sentiment,
             "published_at": self.published_at.isoformat() if self.published_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
-            "source_name": self.raw_news.source_name if self.raw_news else "Unknown",
-            "image_url": self.image_url,
-            "access_link": self.access_link
+            "source_name": self.raw_news.source_name if self.raw_news else "Unknown"
         }
 
 class DailyDigest(Base):
@@ -280,19 +278,6 @@ class Advertisement(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "image_url": self.image_url,
-            "caption": self.caption,
-            "position": self.position,
-            "target_node": self.target_node,
-            "target_url": self.target_url,
-            "target_platform": self.target_platform,
-            "is_active": self.is_active,
-            "created_at": self.created_at.isoformat() if self.created_at else None
-        }
-
 class Newspaper(Base):
     __tablename__ = "newspapers"
     
@@ -304,17 +289,6 @@ class Newspaper(Base):
     country = Column(String, default="Global")
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "url": self.url,
-            "logo_text": self.logo_text,
-            "logo_color": self.logo_color,
-            "country": self.country,
-            "created_at": self.created_at.isoformat() if self.created_at else None
-        }
-
 class ProtocolHistory(Base):
     __tablename__ = "protocol_history"
     
@@ -322,20 +296,9 @@ class ProtocolHistory(Base):
     action = Column(String, nullable=False) # e.g. 'deploy', 'delete', 'register'
     target_type = Column(String, nullable=False) # e.g. 'article', 'source', 'ad'
     target_id = Column(String, nullable=True)
-    admin_user = Column(String, default="Admin")
+    admin_user = Column(String, nullable=False)
     details = Column(Text, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "action": self.action,
-            "target_type": self.target_type,
-            "target_id": self.target_id,
-            "admin_user": self.admin_user,
-            "details": self.details,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None
-        }
 
 class SystemConfig(Base):
     __tablename__ = "system_config"
@@ -347,14 +310,17 @@ class SystemConfig(Base):
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
-    # Production Optimized Engine for PostgreSQL (Supabase/Railway)
+    # Production Optimized Engine for PostgreSQL (Supabase/Railway with pgBouncer compatibility)
     engine = create_engine(
         DATABASE_URL,
         pool_pre_ping=True,    # Checks if connection is alive before using it
-        pool_recycle=1800,     # Refresh connections every 30 minutes
-        pool_size=10,          # Base connection pool size
-        max_overflow=20,       # Allow up to 20 extra connections during bursts
-        connect_args={"connect_timeout": 30}
+        pool_recycle=600,      # Recycles connections every 10 minutes to prevent stale pgBouncer links
+        pool_size=15,          # Cap baseline connection pool size
+        max_overflow=25,       # Maximum transient bursting connections
+        connect_args={
+            "connect_timeout": 30,
+            "application_name": "UniArcBackendPooling"
+        }
     )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

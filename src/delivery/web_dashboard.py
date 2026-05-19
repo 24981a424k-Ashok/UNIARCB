@@ -15,7 +15,8 @@ _EXAM_CACHE = {"data": None, "expires_at": 0}
 _bootstrap_cache = {}  # Format: {key: {"data": ..., "timestamp": ...}}
 _article_detail_cache = {} # Format: {key: {"data": ..., "timestamp": ...}}
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Request, Depends, HTTPException, BackgroundTasks, Body, Form, File, UploadFile
+from fastapi import APIRouter, Request, Response, Depends, HTTPException, BackgroundTasks, Body, Form, File, UploadFile
+from src.utils.redis_cache import redis_cache
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -153,14 +154,14 @@ def normalize_article_data(data: dict, strip_large_fields: bool = False):
     
     # 1. Normalize bullet lists (handle both 'summary_bullets' and 'bullets' keys)
     bullets_key = "summary_bullets" if "summary_bullets" in data else "bullets"
-    article_cat = data.get("category", "General")
     data[bullets_key] = _deep_normalize_list(data.get(bullets_key, []))
     
     # ENSURE AT LEAST 3 BULLETS
     if not data[bullets_key] or len(data[bullets_key]) < 3:
+        cat = data.get("category", "General")
         title = data.get("title", "this development")[:80]
         extra_bullets = [
-            f"This update highlights a pivotal moment for {article_cat} stakeholders.",
+            f"This update highlights a pivotal moment for {cat} stakeholders.",
             f"Observers are noting significant implications for future planning and policy."
         ]
         if not data[bullets_key]:
@@ -238,12 +239,17 @@ def normalize_article_data(data: dict, strip_large_fields: bool = False):
             data[field] = val
         
     # 3. Force rebuild 'content' for old JS compatibility
-    # Use normalized values for the combined body - SIMPLIFIED: No images, why, or who
+    # Use normalized values for the combined body
     bullets_text = "\n".join([f"• {b}" for b in data.get(bullets_key, [])])
-    data["content"] = f"### {data.get('title', 'Intelligence report')}\n\n**Summary:**\n{bullets_text}\n\n---\n*Source: {data.get('official_url') or data.get('url') or 'Global Intel'}*"
+    data["content"] = f"### {data.get('title', 'Intelligence report')}\n\n**Summary:**\n{bullets_text}\n\n**Why It Matters:**\n{data.get(why_key, '')}\n\n**Who is Affected:**\n{data.get(who_key, '')}\n\n**Extra Context:**\n{data.get('extra_stuff', '')}\n\n**What Happens Next:**\n{data.get('what_happens_next', '')}\n\n---\n*Source: {data.get('official_url') or data.get('url') or 'Global Intel'}*"
     
-    # Force null for images as per user request (Simplified UI) - REMOVED to restore images
-    # data["image_url"] = None
+    # Force absolute URLs for images
+    image_url = data.get("image_url")
+    article_cat = data.get("category", "General")
+    if data.get("student_category"): article_cat = "Education"
+    
+    if not image_url or str(image_url).lower() == 'none' or str(image_url) == "":
+        data["image_url"] = get_fallback_image(data.get("title", ""), article_cat)
     
     # NEW: Strip HTML from title and source to prevent code leaks
     import re
@@ -253,14 +259,12 @@ def normalize_article_data(data: dict, strip_large_fields: bool = False):
         data["source_name"] = re.sub('<[^<]+?>', '', str(data["source_name"]))
     
     # NEW: Robust fallback for empty Why It Matters / Who Affected
-    title_str = str(data.get("title") or "this event")[:40]
-    cat_str = str(data.get("category") or "Industry")
     if not data.get("why") or len(str(data["why"]).strip()) < 10:
-        data["why"] = f"Strategic advancement in {cat_str} intelligence. Analysts examine the long-term potential of '{title_str}...' to redefine local standards."
+        data["why"] = f"Strategic advancement in {article_cat} intelligence. Analysts examine the long-term potential of '{data.get('title', 'this event')[:40]}...' to redefine local standards."
         data["why_it_matters"] = data["why"]
         
     if not data.get("affected") or len(str(data["affected"]).strip()) < 10:
-        data["affected"] = f"Policy makers, industry specialized groups, and regional stakeholders monitoring '{cat_str}' developments."
+        data["affected"] = f"Policy makers, industry specialized groups, and regional stakeholders monitoring '{article_cat}' developments."
         data["who_is_affected"] = data["affected"]
 
 
@@ -273,14 +277,6 @@ def normalize_article_data(data: dict, strip_large_fields: bool = False):
         data["image_url"] = f"/static/{image_url.lstrip('/')}"
 
     # 4. Strip large fields if requested to save bandwidth (Egress Optimization)
-    # Also strip hidden fields from public display
-    data.pop("why", None)
-    data.pop("why_it_matters", None)
-    data.pop("affected", None)
-    data.pop("who_is_affected", None)
-    data.pop("extra_stuff", None)
-    data.pop("what_happens_next", None)
-
     if strip_large_fields:
         data.pop("content", None)
         data.pop("analysis", None)
@@ -322,17 +318,11 @@ def is_student_article_logic(article):
     # 2. Keyword check (Ensure we don't miss articles that are relevant but not yet categorized)
     has_keywords = any(kw.lower() in combined for kw in STUDENT_KEYWORDS)
     
-    # 3. Global priority check
-    is_global = getattr(article, 'country', '') == "Global"
-    
-    # 4. Impact check - if it's Global and highly impactful, students should see it as "General Awareness"
-    is_high_impact_global = is_global and (getattr(article, 'impact_score', 0) or 0) >= 8
-    
     # Specific exclusion for pure market/stock news not impacting education
     if ("stock price" in combined or "market capitalization" in combined) and not is_student_cat:
         return False
             
-    return is_student_cat or has_keywords or is_high_impact_global
+    return is_student_cat or has_keywords
 
 def log_protocol_action(db: Session, action: str, target_type: str, target_id: str = None, admin_user: str = "Admin", details: str = None):
     """Helper to record administrative actions for protocol history."""
@@ -428,7 +418,6 @@ def normalize_country(c):
 
 
 # REMOVED: Root redirect/landing page (Moved to Frontend Server)
-
 # =============================================================================
 # API v2: BOOTSTRAP — True Decoupled Frontend Entry Point
 # Returns all dashboard context as JSON (no Jinja2 / HTML rendering)
@@ -437,16 +426,16 @@ def normalize_country(c):
 @router.get("/api/v2/bootstrap")
 async def api_bootstrap(
     request: Request,
+    response: Response,
+    background_tasks: BackgroundTasks,
     category: str = None,
     country: str = None,
     lang: str = 'english',
     db: Session = Depends(get_db)
 ):
     """
-    JSON bootstrap endpoint for the decoupled frontend.
+    JSON bootstrap endpoint for the decoupled frontend using Stale-While-Revalidate pattern.
     """
-    global _bootstrap_cache
-    
     # 0. NORMALIZE LANGUAGE CODE
     if lang:
         lang = lang.lower().strip()
@@ -456,15 +445,15 @@ async def api_bootstrap(
             "pa": "punjabi"
         }
         lang = mapping.get(lang, lang)
+
+    cache_key = f"uniarc:bootstrap:{category}_{country}_{lang}"
     
-    # 1. Check Cache (10-minute TTL)
-    cache_key = f"{category}_{country}_{lang}"
-    now = datetime.now()
-    if cache_key in _bootstrap_cache:
-        entry = _bootstrap_cache[cache_key]
-        if (now - entry["timestamp"]).total_seconds() < 600:
-            # Ensure Firebase config is ALWAYS fresh from environment variables
-            cached_data = entry["data"].copy()
+    try:
+        cached_entry = await redis_cache.get(cache_key)
+        if cached_entry and isinstance(cached_entry, dict) and "data" in cached_entry and "timestamp" in cached_entry:
+            # We have a valid SWR cache entry!
+            cached_data = cached_entry["data"]
+            # Ensure Firebase config is ALWAYS fresh from current environment variables
             cached_data["firebase_config"] = {
                 "apiKey": settings.FIREBASE_API_KEY,
                 "authDomain": settings.FIREBASE_AUTH_DOMAIN,
@@ -473,377 +462,448 @@ async def api_bootstrap(
                 "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
                 "appId": settings.FIREBASE_APP_ID
             }
+            
+            # Check if stale (older than 60 seconds)
+            age = time.time() - cached_entry["timestamp"]
+            if age > 60:
+                logger.info(f"Stale-While-Revalidate: serving stale data for {cache_key} (age: {int(age)}s), scheduling background update...")
+                background_tasks.add_task(_async_background_bootstrap_refresh, category, country, lang, cache_key)
+            else:
+                logger.info(f"Stale-While-Revalidate: serving fresh cached data for {cache_key} (age: {int(age)}s)")
+                
+            response.headers["Cache-Control"] = "public, max-age=60, s-maxage=86400"
             return cached_data
+            
+        elif cached_entry and not (isinstance(cached_entry, dict) and "data" in cached_entry):
+            # Legacy cache migration: treat legacy cached value as fresh but wrap it immediately
+            logger.info(f"Stale-While-Revalidate: migrating legacy cache format for {cache_key}")
+            # Ensure Firebase config is fresh
+            cached_entry["firebase_config"] = {
+                "apiKey": settings.FIREBASE_API_KEY,
+                "authDomain": settings.FIREBASE_AUTH_DOMAIN,
+                "projectId": settings.FIREBASE_PROJECT_ID,
+                "storageBucket": settings.FIREBASE_STORAGE_BUCKET,
+                "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
+                "appId": settings.FIREBASE_APP_ID
+            }
+            wrapped = {
+                "data": cached_entry,
+                "timestamp": time.time()
+            }
+            await redis_cache.set(cache_key, wrapped, ttl=86400)
+            response.headers["Cache-Control"] = "public, max-age=60, s-maxage=86400"
+            return cached_entry
 
+    except Exception as cache_err:
+        logger.error(f"SWR Cache read error for {cache_key}: {cache_err}")
+
+    # Cache miss or error: fetch synchronously
+    logger.info(f"Stale-While-Revalidate: cache miss for {cache_key}, running synchronous fetch...")
+    result = await _fetch_bootstrap_data(category, country, lang, db)
+    
+    # Save to cache with wrapping format
+    wrapped = {
+        "data": result,
+        "timestamp": time.time()
+    }
+    await redis_cache.set(cache_key, wrapped, ttl=86400)
+    response.headers["Cache-Control"] = "public, max-age=60, s-maxage=86400"
+    return result
+
+
+async def _fetch_bootstrap_data(category: Optional[str], country: Optional[str], lang: str, db: Session) -> dict:
+    """Core database query and computation logic for frontend bootstrap, completely decoupled from HTTP requests."""
     # Fetch UI Translations early for potential error responses or fallbacks
     ui_labels = get_ui_translations(lang)
 
-    try:
-        # Get latest digest
-        latest_digest = db.query(DailyDigest).filter(DailyDigest.is_published == True).order_by(DailyDigest.date.desc()).first()
-        if not latest_digest:
-            latest_digest = db.query(DailyDigest).order_by(DailyDigest.date.desc()).first()
+    # Get latest digest
+    latest_digest = db.query(DailyDigest).filter(DailyDigest.is_published == True).order_by(DailyDigest.date.desc()).first()
+    if not latest_digest:
+        latest_digest = db.query(DailyDigest).order_by(DailyDigest.date.desc()).first()
 
-        # Auto-repair
-        if not latest_digest and db.query(VerifiedNews).count() > 0:
-            try:
-                from src.digest.generator import DigestGenerator
-                generator = DigestGenerator()
-                await generator.create_daily_digest(db)
-                latest_digest = db.query(DailyDigest).filter(DailyDigest.is_published == True).order_by(DailyDigest.date.desc()).first()
-            except Exception as de:
-                logger.error(f"Digest auto-repair failed: {de}")
+    # Auto-repair
+    if not latest_digest and db.query(VerifiedNews).count() > 0:
+        try:
+            from src.digest.generator import DigestGenerator
+            generator = DigestGenerator()
+            await generator.create_daily_digest(db)
+            latest_digest = db.query(DailyDigest).filter(DailyDigest.is_published == True).order_by(DailyDigest.date.desc()).first()
+        except Exception as de:
+            logger.error(f"Digest auto-repair failed: {de}")
 
-        # Ads
-        all_ads = db.query(Advertisement).filter(
-            or_(Advertisement.target_platform == "main", Advertisement.target_platform == "both")
-        ).order_by(Advertisement.created_at.desc()).limit(30).all()
-        if not all_ads:
-            all_ads = db.query(Advertisement).order_by(Advertisement.created_at.desc()).limit(10).all()
+    # Ads
+    all_ads = db.query(Advertisement).filter(
+        or_(Advertisement.target_platform == "main", Advertisement.target_platform == "both")
+    ).order_by(Advertisement.created_at.desc()).limit(30).all()
+    if not all_ads:
+        all_ads = db.query(Advertisement).order_by(Advertisement.created_at.desc()).limit(10).all()
 
-        def _ad_to_dict(ad):
-            return {
-                "id": ad.id,
-                "caption": ad.caption,
-                "image_url": ad.image_url,
-                "target_url": ad.target_url,
-                "position": getattr(ad, 'position', 'both'),
-            }
-
-        left_ads  = [_ad_to_dict(a) for a in all_ads if getattr(a, 'position', 'both') in ("left", "both")]
-        right_ads = [_ad_to_dict(a) for a in all_ads if getattr(a, 'position', 'both') in ("right", "both")]
-        mobile_ads = [_ad_to_dict(a) for a in all_ads if getattr(a, 'position', 'both') in ("mobile", "both")]
-
-        # Papers & Categories
-        papers = db.query(Newspaper).order_by(Newspaper.name.asc()).all()
-        unique_map   = {}
-        unique_papers = []
-        for p in papers:
-            key = (p.country or "Global").strip().lower()
-            if key not in unique_map:
-                unique_map[key] = True
-                unique_papers.append({"id": p.id, "name": p.name, "country": p.country, "url": p.url, "logo_color": p.logo_color, "logo_text": p.logo_text})
-
-        categories = [c[0] for c in db.query(VerifiedNews.category).distinct().all() if c[0]]
-        
-        # User explicitly wants 'Sports' and 'Ai & Machine Learning' to be available
-        required_cats = ["Sports", "Ai & Machine Learning", "Politics", "Tech", "Business", "Finances", "Science & Health"]
-        for rc in required_cats:
-            if rc not in categories:
-                categories.append(rc)
-                
-        # Deduplicate and sort
-        categories = sorted(list(set(categories)))
-
-        # Digest processing (freshness + dedup)
-        import copy as _copy
-        digest_data = _copy.deepcopy(latest_digest.content_json) if latest_digest else {
-            "top_stories": [], "breaking_news": [], "trending_news": [], "brief": [],
-            "is_system_initializing": True
+    def _ad_to_dict(ad):
+        return {
+            "id": ad.id,
+            "caption": ad.caption,
+            "image_url": ad.image_url,
+            "target_url": ad.target_url,
+            "position": getattr(ad, 'position', 'both'),
         }
 
-        now_utc = datetime.utcnow()
-        cutoff = now_utc - timedelta(hours=48)
-        def _fresh(item):
-            """Returns True if article is fresh (< 48h). Articles with no date are KEPT."""
-            pub = item.get("published_at") or item.get("created_at")
-            if not pub:
-                return True  # No date = keep it (don't punish articles for missing metadata)
-            if not isinstance(pub, str):
-                return True
-            try:
-                clean_pub = pub.replace("Z", "+00:00")
-                if "." in clean_pub and "+" not in clean_pub:
-                    clean_pub = clean_pub.split(".")[0] + "+00:00"
-                parsed_date = datetime.fromisoformat(clean_pub)
-                if parsed_date.tzinfo is None:
-                    from datetime import timezone
-                    parsed_date = parsed_date.replace(tzinfo=timezone.utc)
-                aware_cutoff = cutoff.replace(tzinfo=timezone.utc) if cutoff.tzinfo is None else cutoff
-                return parsed_date > aware_cutoff
-            except Exception:
-                return True  # On parse error, keep the article
+    left_ads  = [_ad_to_dict(a) for a in all_ads if getattr(a, 'position', 'both') in ("left", "both")]
+    right_ads = [_ad_to_dict(a) for a in all_ads if getattr(a, 'position', 'both') in ("right", "both")]
+    mobile_ads = [_ad_to_dict(a) for a in all_ads if getattr(a, 'position', 'both') in ("mobile", "both")]
 
-        # Main Dashboard: English-only by default
-        # Accept: lang is None, lang='english', OR title is mostly latin characters
-        def _is_mostly_english(text):
-            if not text: return True
-            latin = sum(1 for c in str(text) if ord(c) < 128)
-            total = len(str(text))
-            if total == 0: return True
-            return (latin / total) > 0.80  # Slightly relaxed from 0.85
+    # Papers & Categories
+    papers = db.query(Newspaper).order_by(Newspaper.name.asc()).all()
+    unique_map   = {}
+    unique_papers = []
+    for p in papers:
+        key = (p.country or "Global").strip().lower()
+        if key not in unique_map:
+            unique_map[key] = True
+            unique_papers.append({"id": p.id, "name": p.name, "country": p.country, "url": p.url, "logo_color": p.logo_color, "logo_text": p.logo_text})
 
-        if not lang or lang.lower() == 'english':
-            if not country and not category:
-                for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
-                    if sec in digest_data and digest_data[sec]:
-                        digest_data[sec] = [
-                            s for s in digest_data[sec]
-                            # Accept: no lang set (assume english), or explicitly english, AND title looks english
-                            if (s.get("lang") or "english").lower() in ('english', 'en')
-                            and _is_mostly_english(s.get("title"))
-                        ]
-
-        # Ensure section existence for UI stability
-        for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
-            if sec not in digest_data: digest_data[sec] = []
-
-        # Freshness filter FIRST (before backfill)
-        for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
-            if sec in digest_data and digest_data[sec]:
-                digest_data[sec] = [s for s in digest_data[sec] if _fresh(s)]
-
-        # HEAL: Backfill AFTER freshness filter so sections are never empty
-        if not digest_data.get("breaking_news") and digest_data.get("top_stories"):
-            digest_data["breaking_news"] = digest_data["top_stories"][:15]
-        if not digest_data.get("trending_news") and digest_data.get("top_stories"):
-            digest_data["trending_news"] = digest_data["top_stories"][15:30]
-        # Last resort: if top_stories also empty, pull direct from DB
-        if not digest_data.get("breaking_news"):
-            live_breaking = db.query(VerifiedNews).filter(
-                or_(VerifiedNews.lang == 'english', VerifiedNews.lang == None)
-            ).order_by(VerifiedNews.impact_score.desc(), VerifiedNews.id.desc()).limit(15).all()
-            digest_data["breaking_news"] = [normalize_article_data(n.to_dict()) for n in live_breaking]
-
-        # Normalize all sections
-        from src.utils.ui_trans import get_ui_labels
-        ui = get_ui_labels(lang or "english")
-        for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
-            if sec in digest_data:
-                for s in digest_data[sec]:
-                    normalize_article_data(s, strip_large_fields=True)
-                    s["ui_key_points"] = ui.get("key_points", "Key Points")
-                    s["ui_why_it_matters"] = ui.get("why_it_matters", "Why It Matters")
-                    s["ui_who_affected"] = ui.get("who_affected", "Who is Affected")
-
-        # Category filter
-        if category and digest_data:
-            normalized_cat = category.lower().strip()
-            synonyms = {
-                "technology": "tech", 
-                "finances": "finance", 
-                "economy": "finance", 
-                "geopolitics": "politics",
-                "ai": "ai & machine learning",
-                "ai_&_machine_learning": "ai & machine learning"
-            }
-            cat_target = synonyms.get(normalized_cat, normalized_cat)
+    categories = [c[0] for c in db.query(VerifiedNews.category).distinct().all() if c[0]]
+    
+    # User explicitly wants 'Sports' and 'Ai & Machine Learning' to be available
+    required_cats = ["Sports", "Ai & Machine Learning", "Politics", "Tech", "Business", "Finances", "Science & Health"]
+    for rc in required_cats:
+        if rc not in categories:
+            categories.append(rc)
             
-            # Filter from existing digest first
-            for sec in ["top_stories", "breaking_news", "trending_news"]:
-                if sec in digest_data:
+    # Deduplicate and sort
+    categories = sorted(list(set(categories)))
+
+    # Digest processing (freshness + dedup)
+    import copy as _copy
+    digest_data = _copy.deepcopy(latest_digest.content_json) if latest_digest else {
+        "top_stories": [], "breaking_news": [], "trending_news": [], "brief": [],
+        "is_system_initializing": True
+    }
+
+    now_utc = datetime.utcnow()
+    cutoff = now_utc - timedelta(hours=48)
+    def _fresh(item):
+        """Returns True if article is fresh (< 48h). Articles with no date are KEPT."""
+        pub = item.get("published_at") or item.get("created_at")
+        if not pub:
+            return True  # No date = keep it
+        if not isinstance(pub, str):
+            return True
+        try:
+            clean_pub = pub.replace("Z", "+00:00")
+            if "." in clean_pub and "+" not in clean_pub:
+                clean_pub = clean_pub.split(".")[0] + "+00:00"
+            parsed_date = datetime.fromisoformat(clean_pub)
+            if parsed_date.tzinfo is None:
+                from datetime import timezone
+                parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+            aware_cutoff = cutoff.replace(tzinfo=timezone.utc) if cutoff.tzinfo is None else cutoff
+            return parsed_date > aware_cutoff
+        except Exception:
+            return True
+
+    # Main Dashboard: English-only by default
+    def _is_mostly_english(text):
+        if not text: return True
+        latin = sum(1 for c in str(text) if ord(c) < 128)
+        total = len(str(text))
+        if total == 0: return True
+        return (latin / total) > 0.80
+
+    if not lang or lang.lower() == 'english':
+        if not country and not category:
+            for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
+                if sec in digest_data and digest_data[sec]:
                     digest_data[sec] = [
                         s for s in digest_data[sec]
-                        if (s.get("category") or "").lower().strip() in (cat_target, normalized_cat)
+                        if (s.get("lang") or "english").lower() in ('english', 'en')
+                        and _is_mostly_english(s.get("title"))
                     ]
-            
-            # LIVE FALLBACK for Category - Guarantee 20-50 articles
-            target_count = 35 
-            current_count = len(digest_data.get("top_stories", []))
-            
-            if current_count < target_count:
-                needed = target_count - current_count
-                existing_ids = [s.get("id") for s in digest_data.get("top_stories", []) if s.get("id")]
-                
-                # Broad search using ILIKE for the category name
-                query = db.query(VerifiedNews).filter(
-                    or_(
-                        VerifiedNews.category.ilike(f"%{category}%"),
-                        VerifiedNews.category.ilike(f"%{cat_target}%"),
-                        VerifiedNews.title.ilike(f"%{category}%")
-                    )
-                )
-                if not lang or lang.lower() == 'english':
-                    query = query.filter(VerifiedNews.lang == 'english')
-                
-                if existing_ids:
-                    query = query.filter(VerifiedNews.id.not_in(existing_ids))
-                
-                live_cat = query.order_by(VerifiedNews.id.desc()).limit(needed).all()
-                new_stories = [normalize_article_data(n.to_dict()) for n in live_cat]
-                
-                if "top_stories" not in digest_data: digest_data["top_stories"] = []
-                digest_data["top_stories"].extend(new_stories)
-                
-                # Final Padding: If STILL not 20, pad with latest news
-                if len(digest_data["top_stories"]) < 20:
-                    needed = 20 - len(digest_data["top_stories"])
-                    existing_ids = [s.get("id") for s in digest_data["top_stories"] if s.get("id")]
-                    pad_query = db.query(VerifiedNews)
-                    if not lang or lang.lower() == 'english':
-                        pad_query = pad_query.filter(VerifiedNews.lang == 'english')
-                    if existing_ids:
-                        pad_query = pad_query.filter(VerifiedNews.id.not_in(existing_ids))
-                    padding = pad_query.order_by(VerifiedNews.id.desc()).limit(needed).all()
-                    digest_data["top_stories"].extend([normalize_article_data(n.to_dict()) for n in padding])
-            
-            # Cap at 50
-            if len(digest_data["top_stories"]) > 50:
-                digest_data["top_stories"] = digest_data["top_stories"][:50]
 
-        # Country Node Localization
-        elif country and digest_data:
-            target_name, match_keys, target_lang, _ = normalize_country(country)
-            
-            # India Node Special Handling: Default to English as per user request
-            if target_name.lower() == "india":
-                target_lang = "english"
-            
-            # Japanese Node Special Handling
-            if target_name.lower() == "japan":
-                target_lang = "japanese"
-                
-            countries_data = digest_data.get("countries", {})
-            country_stories = []
-            for k, v in countries_data.items():
-                if k.lower() in match_keys:
-                    country_stories = v
-                    break
-            
-            # LIVE FALLBACK for Country Node
-            if not country_stories or len(country_stories) < 20:
-                needed = 20 - len(country_stories)
-                existing_ids = [s.get("id") for s in country_stories]
-                
-                live_country = db.query(VerifiedNews).filter(
-                    VerifiedNews.country.in_(match_keys),
-                    VerifiedNews.id.not_in(existing_ids) if existing_ids else True
-                ).order_by(VerifiedNews.id.desc()).limit(needed).all()
-                
-                new_stories = [normalize_article_data({"id": n.id, "title": n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in live_country]
-                country_stories.extend(new_stories)
-                
-                # If STILL not 20, pad with latest news
-                if len(country_stories) < 20:
-                    needed = 20 - len(country_stories)
-                    existing_ids = [s.get("id") for s in country_stories]
-                    padding = db.query(VerifiedNews).filter(
-                        VerifiedNews.id.not_in(existing_ids) if existing_ids else True
-                    ).order_by(VerifiedNews.id.desc()).limit(needed).all()
-                    country_stories.extend([normalize_article_data({"id": n.id, "title": n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in padding])
-            
-            if country_stories:
-                # NORMALIZE
-                for s in country_stories:
-                    normalize_article_data(s)
-                digest_data["top_stories"] = country_stories
-                
-            # Perfection: Auto-translate if country node selected and it has a native language
-            if target_lang and target_lang != 'english' and digest_data.get("top_stories"):
-                try:
-                    await translator.translate_node_bulk({"stories": digest_data["top_stories"]}, target_lang)
-                except Exception as e:
-                    logger.error(f"Auto-country translation failed: {e}")
+    # Ensure section existence for UI stability
+    for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
+        if sec not in digest_data: digest_data[sec] = []
 
-        # --- LIVE FALLBACK for Main Dashboard ---
-        if not digest_data.get("top_stories") and not category and not country:
-            # Perfection: Only English by default
-            live_main = db.query(VerifiedNews).filter(
-                or_(VerifiedNews.lang == 'english', VerifiedNews.lang == None)
-            ).order_by(VerifiedNews.id.desc()).limit(15).all()
-            if live_main:
-                digest_data["top_stories"] = [normalize_article_data({"id": n.id, "title": n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in live_main]
-                digest_data["is_system_initializing"] = False 
+    # Freshness filter FIRST
+    for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
+        if sec in digest_data and digest_data[sec]:
+            digest_data[sec] = [s for s in digest_data[sec] if _fresh(s)]
 
-        # Deduplicate Metadata Sections across all stories (Post-selection Pass)
+    # HEAL: Backfill AFTER freshness filter so sections are never empty
+    if not digest_data.get("breaking_news") and digest_data.get("top_stories"):
+        digest_data["breaking_news"] = digest_data["top_stories"][:15]
+    if not digest_data.get("trending_news") and digest_data.get("top_stories"):
+        digest_data["trending_news"] = digest_data["top_stories"][15:30]
+    # Last resort: if top_stories also empty, pull direct from DB
+    if not digest_data.get("breaking_news"):
+        live_breaking = db.query(VerifiedNews).filter(
+            or_(VerifiedNews.lang == 'english', VerifiedNews.lang == None)
+        ).order_by(VerifiedNews.impact_score.desc(), VerifiedNews.id.desc()).limit(15).all()
+        digest_data["breaking_news"] = [normalize_article_data(n.to_dict()) for n in live_breaking]
+
+    # Normalize all sections
+    from src.utils.ui_trans import get_ui_labels
+    ui = get_ui_labels(lang or "english")
+    for sec in ["top_stories", "breaking_news", "trending_news", "brief"]:
+        if sec in digest_data:
+            for s in digest_data[sec]:
+                normalize_article_data(s, strip_large_fields=True)
+                s["ui_key_points"] = ui.get("key_points", "Key Points")
+                s["ui_why_it_matters"] = ui.get("why_it_matters", "Why It Matters")
+                s["ui_who_affected"] = ui.get("who_affected", "Who is Affected")
+
+    # Category filter
+    if category and digest_data:
+        normalized_cat = category.lower().strip()
+        synonyms = {
+            "technology": "tech", 
+            "finances": "finance", 
+            "economy": "finance", 
+            "geopolitics": "politics",
+            "ai": "ai & machine learning",
+            "ai_&_machine_learning": "ai & machine learning"
+        }
+        cat_target = synonyms.get(normalized_cat, normalized_cat)
+        
         for sec in ["top_stories", "breaking_news", "trending_news"]:
             if sec in digest_data:
-                for s in digest_data[sec]:
-                    # Ensure affected and why are not identical
-                    if s.get("affected") == s.get("why"):
-                        s["affected"] = f"Stakeholders in {s.get('category', 'Global Nodes')}"
-                    
-                    # Add UI Labels for TTS stability
-                    from src.utils.ui_trans import get_ui_labels
-                    ui = get_ui_labels(lang or "english")
-                    s["ui_key_points"] = ui.get("key_points", "Key Points")
-                    s["ui_why_it_matters"] = ui.get("why_it_matters", "Why It Matters")
-                    s["ui_who_affected"] = ui.get("who_affected", "Who is Affected")
-
-        firebase_config = {
-            "apiKey": settings.FIREBASE_API_KEY,
-            "authDomain": settings.FIREBASE_AUTH_DOMAIN,
-            "projectId": settings.FIREBASE_PROJECT_ID,
-            "storageBucket": settings.FIREBASE_STORAGE_BUCKET,
-            "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
-            "appId": settings.FIREBASE_APP_ID
-        }
-
-        # --- GLOBAL TRANSLATION PASS (Strict Requirement) ---
-        effective_lang = lang
-        if not lang or lang.lower() == 'english':
-             if country and normalize_country(country)[0].lower() == "india":
-                 effective_lang = "english"
-            
-        if effective_lang and effective_lang.lower() != 'english' and digest_data:
-            import asyncio
-            try:
-                # 1. Translate Main Dashboard Stories
-                await asyncio.wait_for(
-                    translator.translate_node_bulk(digest_data, effective_lang),
-                    timeout=60.0
-                )
-                
-                # 2. ON-DEMAND TRANSLATION FOR BREAKING NEWS
-                if digest_data.get("breaking_news"):
-                    logger.info(f"Triggering on-demand translation for breaking news ({effective_lang})...")
-                    # Use translate_stories which is more direct for lists
-                    digest_data["breaking_news"] = await translator.translate_stories(
-                        digest_data["breaking_news"][:10], # Top 10 for speed
-                        effective_lang
-                    )
-            except Exception as e:
-                logger.error(f"Global API Bootstrap translation failed: {e}")
-
-        result = {
-            "status": "success",
-            "date": latest_digest.date.strftime("%Y-%m-%d") if latest_digest else "Initializing",
-            "digest": digest_data,
-            "firebase_config": firebase_config,
-            "left_ads": left_ads,
-            "right_ads": right_ads,
-            "mobile_ads": mobile_ads,
-            "papers": unique_papers,
-            "categories": categories,
-            "vapid_public_key": settings.VAPID_PUBLIC_KEY,
-            "selected_category": category,
-            "selected_country": country,
-            "selected_lang": lang,
-            "trending_title": f"{category.capitalize()} Trending" if category else "Global Intelligence Feed",
-            "ui": get_ui_translations(lang),
-        }
+                digest_data[sec] = [
+                    s for s in digest_data[sec]
+                    if (s.get("category") or "").lower().strip() in (cat_target, normalized_cat)
+                ]
         
-        # 4. Update Cache — Cache ALL responses (including regional) to avoid 
-        # repeated translation bottlenecks. The cache_key includes 'lang' 
-        # so it's safe and isolated.
-        _bootstrap_cache[cache_key] = {"data": result, "timestamp": datetime.now()}
-        return result
+        # LIVE FALLBACK for Category
+        target_count = 35 
+        current_count = len(digest_data.get("top_stories", []))
+        
+        if current_count < target_count:
+            needed = target_count - current_count
+            existing_ids = [s.get("id") for s in digest_data.get("top_stories", []) if s.get("id")]
+            
+            query = db.query(VerifiedNews).filter(
+                or_(
+                    VerifiedNews.category.ilike(f"%{category}%"),
+                    VerifiedNews.category.ilike(f"%{cat_target}%"),
+                    VerifiedNews.title.ilike(f"%{category}%")
+                )
+            )
+            if not lang or lang.lower() == 'english':
+                query = query.filter(VerifiedNews.lang == 'english')
+            
+            if existing_ids:
+                query = query.filter(VerifiedNews.id.not_in(existing_ids))
+            
+            live_cat = query.order_by(VerifiedNews.id.desc()).limit(needed).all()
+            new_stories = [normalize_article_data(n.to_dict()) for n in live_cat]
+            
+            if "top_stories" not in digest_data: digest_data["top_stories"] = []
+            digest_data["top_stories"].extend(new_stories)
+            
+            if len(digest_data["top_stories"]) < 20:
+                needed = 20 - len(digest_data["top_stories"])
+                existing_ids = [s.get("id") for s in digest_data["top_stories"] if s.get("id")]
+                pad_query = db.query(VerifiedNews)
+                if not lang or lang.lower() == 'english':
+                    pad_query = pad_query.filter(VerifiedNews.lang == 'english')
+                if existing_ids:
+                    pad_query = pad_query.filter(VerifiedNews.id.not_in(existing_ids))
+                padding = pad_query.order_by(VerifiedNews.id.desc()).limit(needed).all()
+                digest_data["top_stories"].extend([normalize_article_data(n.to_dict()) for n in padding])
+        
+        if len(digest_data["top_stories"]) > 50:
+            digest_data["top_stories"] = digest_data["top_stories"][:50]
 
-    except Exception as e:
-        import traceback
-        logger.error(f"Bootstrap API error: {e}\n{traceback.format_exc()}")
-        return {"status": "error", "message": str(e)}
+    # Country Node Localization
+    elif country and digest_data:
+        target_name, match_keys, target_lang, _ = normalize_country(country)
+        
+        if target_name.lower() == "india":
+            target_lang = "english"
+        if target_name.lower() == "japan":
+            target_lang = "japanese"
+            
+        countries_data = digest_data.get("countries", {})
+        country_stories = []
+        for k, v in countries_data.items():
+            if k.lower() in match_keys:
+                country_stories = v
+                break
+        
+        if not country_stories or len(country_stories) < 20:
+            needed = 20 - len(country_stories)
+            existing_ids = [s.get("id") for s in country_stories]
+            
+            live_country = db.query(VerifiedNews).filter(
+                VerifiedNews.country.in_(match_keys),
+                VerifiedNews.id.not_in(existing_ids) if existing_ids else True
+            ).order_by(VerifiedNews.id.desc()).limit(needed).all()
+            
+            new_stories = [normalize_article_data({"id": n.id, "title": n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in live_country]
+            country_stories.extend(new_stories)
+            
+            if len(country_stories) < 20:
+                needed = 20 - len(country_stories)
+                existing_ids = [s.get("id") for s in country_stories]
+                padding = db.query(VerifiedNews).filter(
+                    VerifiedNews.id.not_in(existing_ids) if existing_ids else True
+                ).order_by(VerifiedNews.id.desc()).limit(needed).all()
+                country_stories.extend([normalize_article_data({"id": n.id, "title": n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in padding])
+        
+        if country_stories:
+            for s in country_stories:
+                normalize_article_data(s)
+            digest_data["top_stories"] = country_stories
+            
+        if target_lang and target_lang != 'english' and digest_data.get("top_stories"):
+            try:
+                await translator.translate_node_bulk({"stories": digest_data["top_stories"]}, target_lang)
+            except Exception as e:
+                logger.error(f"Auto-country translation failed: {e}")
+
+    # --- LIVE FALLBACK for Main Dashboard ---
+    if not digest_data.get("top_stories") and not category and not country:
+        live_main = db.query(VerifiedNews).filter(
+            or_(VerifiedNews.lang == 'english', VerifiedNews.lang == None)
+        ).order_by(VerifiedNews.id.desc()).limit(15).all()
+        if live_main:
+            digest_data["top_stories"] = [normalize_article_data({"id": n.id, "title": n.title, "category": n.category, "bullets": n.summary_bullets or [n.title]}) for n in live_main]
+            digest_data["is_system_initializing"] = False 
+
+    # Deduplicate Metadata Sections
+    for sec in ["top_stories", "breaking_news", "trending_news"]:
+        if sec in digest_data:
+            for s in digest_data[sec]:
+                if s.get("affected") == s.get("why"):
+                    s["affected"] = f"Stakeholders in {s.get('category', 'Global Nodes')}"
+                
+                from src.utils.ui_trans import get_ui_labels
+                ui = get_ui_labels(lang or "english")
+                s["ui_key_points"] = ui.get("key_points", "Key Points")
+                s["ui_why_it_matters"] = ui.get("why_it_matters", "Why It Matters")
+                s["ui_who_affected"] = ui.get("who_affected", "Who is Affected")
+
+    firebase_config = {
+        "apiKey": settings.FIREBASE_API_KEY,
+        "authDomain": settings.FIREBASE_AUTH_DOMAIN,
+        "projectId": settings.FIREBASE_PROJECT_ID,
+        "storageBucket": settings.FIREBASE_STORAGE_BUCKET,
+        "messagingSenderId": settings.FIREBASE_MESSAGING_SENDER_ID,
+        "appId": settings.FIREBASE_APP_ID
+    }
+
+    effective_lang = lang
+    if not lang or lang.lower() == 'english':
+        if country and normalize_country(country)[0].lower() == "india":
+            effective_lang = "english"
+        
+    if effective_lang and effective_lang.lower() != 'english' and digest_data:
+        try:
+            await asyncio.wait_for(
+                translator.translate_node_bulk(digest_data, effective_lang),
+                timeout=60.0
+            )
+            if digest_data.get("breaking_news"):
+                logger.info(f"Triggering on-demand translation for breaking news ({effective_lang})...")
+                digest_data["breaking_news"] = await translator.translate_stories(
+                    digest_data["breaking_news"][:10],
+                    effective_lang
+                )
+        except Exception as e:
+            logger.error(f"Global API Bootstrap translation failed: {e}")
+
+    result = {
+        "status": "success",
+        "date": latest_digest.date.strftime("%Y-%m-%d") if latest_digest else "Initializing",
+        "digest": digest_data,
+        "firebase_config": firebase_config,
+        "left_ads": left_ads,
+        "right_ads": right_ads,
+        "mobile_ads": mobile_ads,
+        "papers": unique_papers,
+        "categories": categories,
+        "vapid_public_key": settings.VAPID_PUBLIC_KEY,
+        "selected_category": category,
+        "selected_country": country,
+        "selected_lang": lang,
+        "trending_title": f"{category.capitalize()} Trending" if category else "Global Intelligence Feed",
+        "ui": get_ui_translations(lang),
+    }
+    return result
 
 
-# REMOVED: /dashboard HTML route (Moved to Frontend Server)
-# The data is now served exclusively through /api/v2/bootstrap below.
+async def _async_background_bootstrap_refresh(category: Optional[str], country: Optional[str], lang: str, cache_key: str):
+    """Background worker to fetch and refresh the bootstrap Redis cache."""
+    try:
+        logger.info(f"Stale-While-Revalidate: Background refreshing {cache_key}")
+        db = SessionLocal()
+        try:
+            fresh_result = await _fetch_bootstrap_data(category, country, lang, db)
+            wrapped = {
+                "data": fresh_result,
+                "timestamp": time.time()
+            }
+            await redis_cache.set(cache_key, wrapped, ttl=86400)
+            logger.info(f"Stale-While-Revalidate: Background refresh success for {cache_key}")
+        finally:
+            db.close()
+    except Exception as ex:
+        logger.error(f"Stale-While-Revalidate: Background refresh failed for {cache_key}: {ex}")
 
-# REMOVED: Miscellaneous HTML routes (Moved to Frontend Server)
 
 @router.get("/api/article/{article_id}")
-async def get_article_detail(article_id: str, lang: str = "english", url: str = None, db: Session = Depends(get_db)):
-    """Fetch full intelligence detail with on-the-fly transformation for non-English (Cached 1h)"""
-    global _article_detail_cache
+async def get_article_detail(
+    response: Response,
+    background_tasks: BackgroundTasks,
+    article_id: str,
+    lang: str = "english",
+    url: str = None,
+    db: Session = Depends(get_db)
+):
+    """Fetch full intelligence detail using Stale-While-Revalidate pattern."""
+    cache_key = f"uniarc:article:{article_id}_{lang}"
     
-    # 1. Check Cache
-    cache_key = f"{article_id}_{lang}"
-    now = datetime.now()
-    if cache_key in _article_detail_cache:
-        entry = _article_detail_cache[cache_key]
-        if (now - entry["timestamp"]).total_seconds() < 3600:
-            logger.info(f"Serving Article Detail Cache for {cache_key}...")
-            return entry["data"]
+    try:
+        cached_entry = await redis_cache.get(cache_key)
+        if cached_entry and isinstance(cached_entry, dict) and "data" in cached_entry and "timestamp" in cached_entry:
+            cached_data = cached_entry["data"]
+            
+            # Check if stale (older than 600 seconds = 10 minutes)
+            age = time.time() - cached_entry["timestamp"]
+            if age > 600:
+                logger.info(f"Stale-While-Revalidate: serving stale article for {cache_key} (age: {int(age)}s), scheduling background update...")
+                background_tasks.add_task(_async_background_article_refresh, article_id, lang, url, cache_key)
+            else:
+                logger.info(f"Stale-While-Revalidate: serving fresh cached article for {cache_key} (age: {int(age)}s)")
+                
+            response.headers["Cache-Control"] = "public, max-age=60, s-maxage=86400"
+            return cached_data
+            
+        elif cached_entry and not (isinstance(cached_entry, dict) and "data" in cached_entry):
+            logger.info(f"Stale-While-Revalidate: migrating legacy article cache format for {cache_key}")
+            wrapped = {
+                "data": cached_entry,
+                "timestamp": time.time()
+            }
+            await redis_cache.set(cache_key, wrapped, ttl=86400)
+            response.headers["Cache-Control"] = "public, max-age=60, s-maxage=86400"
+            return cached_entry
 
+    except Exception as cache_err:
+        logger.error(f"SWR Cache read error for article {cache_key}: {cache_err}")
+
+    logger.info(f"Stale-While-Revalidate: article cache miss for {cache_key}, running synchronous fetch...")
+    result = await _fetch_article_detail(article_id, lang, url, db)
+    
+    wrapped = {
+        "data": result,
+        "timestamp": time.time()
+    }
+    await redis_cache.set(cache_key, wrapped, ttl=86400)
+    response.headers["Cache-Control"] = "public, max-age=60, s-maxage=86400"
+    return result
+
+
+async def _fetch_article_detail(article_id: str, lang: str, url: Optional[str], db: Session) -> dict:
+    """Core database lookup and LLM transformation logic for article detail."""
     data = {}
     
     # Check if article_id is a DB ID or a URL fallback
@@ -878,7 +938,6 @@ async def get_article_detail(article_id: str, lang: str = "english", url: str = 
             except:
                 data["time_ago"] = "Just Now"
     
-    # If no data found from DB or it's a raw URL (like from Breaking News)
     if not data and (url or not article_id.isdigit()):
         target_url = url or article_id
         # Minimal data for on-the-fly processing
@@ -900,31 +959,9 @@ async def get_article_detail(article_id: str, lang: str = "english", url: str = 
         try:
             target_url = data.get("original_url") or url
             # 1. Fetch & Summarize using LLM (Premium Transformation)
-            # We use LLMAnalyzer to generate a fresh, copyright-safe summary
             logger.info(f"Transforming article for {lang}...")
             
-            # For simplicity in this logic, we'll use LLM to summarize/rewrite
-            # But the user wants: "summarize, add extra stuff, why it matters, what happens next"
-            # We'll use the LLMAnalyzer's capacity or a custom prompt
-            prompt = f"""
-            Task: Analyze and rewrite this news article in {lang}.
-            Rule: DO NOT copy verbatim. Create a unique, transformed version.
-            Structure:
-            1. Detailed Summary (3-4 paragraphs)
-            2. Key Points (bullet list)
-            3. Why It Matters
-            4. What Happens Next & Who is Affected More
-            
-            Source Article URL: {target_url}
-            Current Title: {data.get('title')}
-            
-            Add a timestamp of today: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            Ensure the tone is professional and insightful.
-            """
-            
             # Using llm_analyzer to generate the content
-            # We'll assume the analyzer can take a prompt or we use its analyze method
-            # For speed, we'll call the groq-powered analyzer
             analysis_result = await llm_analyzer.analyze_content(target_url, lang=lang)
             
             if analysis_result:
@@ -954,11 +991,26 @@ async def get_article_detail(article_id: str, lang: str = "english", url: str = 
 
     # ---- DEFINITIVE NORMALIZATION ----
     data = normalize_article_data(data)
-
-    # 4. Save to Cache
-    _article_detail_cache[cache_key] = {"data": {"status": "success", "article": data}, "timestamp": datetime.now()}
-
     return {"status": "success", "article": data}
+
+
+async def _async_background_article_refresh(article_id: str, lang: str, url: Optional[str], cache_key: str):
+    """Background worker to fetch and refresh the article details Redis cache."""
+    try:
+        logger.info(f"Stale-While-Revalidate: Background refreshing article {cache_key}")
+        db = SessionLocal()
+        try:
+            fresh_result = await _fetch_article_detail(article_id, lang, url, db)
+            wrapped = {
+                "data": fresh_result,
+                "timestamp": time.time()
+            }
+            await redis_cache.set(cache_key, wrapped, ttl=86400)
+            logger.info(f"Stale-While-Revalidate: Background article refresh success for {cache_key}")
+        finally:
+            db.close()
+    except Exception as ex:
+        logger.error(f"Stale-While-Revalidate: Background article refresh failed for {cache_key}: {ex}")
 
 @router.get("/api/breaking-news")
 async def get_breaking_news(country: str = None, db: Session = Depends(get_db)):
@@ -1289,15 +1341,14 @@ async def system_check(db: Session = Depends(get_db)):
 @router.get("/api/v2/generate-exam")
 @router.get("/api/v2/generate-exam")
 @router.post("/api/v2/generate-exam")
-async def generate_mock_exam(db: Session = Depends(get_db)):
+async def generate_mock_exam(response: Response, db: Session = Depends(get_db)):
     """Generate a quick mock test from recent news (Consolidated v1/v2) with 24h caching"""
-    global _EXAM_CACHE
-    now = time.time()
-    
-    # Return cached exam if valid
-    if _EXAM_CACHE["data"] and now < _EXAM_CACHE["expires_at"]:
-        logger.info("Serving mock exam from 24h cache.")
-        return {"status": "success", "exam": _EXAM_CACHE["data"]}
+    cache_key = "uniarc:exam"
+    cached = await redis_cache.get(cache_key)
+    if cached:
+        logger.info("Serving mock exam from 24h Redis cache.")
+        response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400"
+        return {"status": "success", "exam": cached}
         
     try:
         generator = ExamGenerator()
@@ -1307,14 +1358,15 @@ async def generate_mock_exam(db: Session = Depends(get_db)):
              return exam_data
              
         # Cache for 24 hours
-        _EXAM_CACHE["data"] = exam_data
-        _EXAM_CACHE["expires_at"] = now + 86400 
-        logger.info("Generated new mock exam and cached for 24h.")
+        await redis_cache.set(cache_key, exam_data, ttl=86400)
+        logger.info("Generated new mock exam and cached for 24h in Redis.")
+        response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400"
         
         return {"status": "success", "exam": exam_data}
     except Exception as e:
         logger.error(f"Exam Generation Failed: {e}")
-        # Return fallback from cache even if expired if we have nothing else
+        # Return fallback from local cache even if expired if we have nothing else
+        global _EXAM_CACHE
         if _EXAM_CACHE["data"]:
             return {"status": "success", "exam": _EXAM_CACHE["data"]}
         return {"status": "error", "message": f"Intelligence node busy: {str(e)}"}
@@ -1517,11 +1569,31 @@ class UniverseRequest(BaseModel):
 @router.post("/api/v2/universe/news")
 @router.get("/api/v2/universe/news")
 @router.post("/api/universe/news")
-async def get_universe_news(payload: UniverseRequest):
+async def get_universe_news(
+    response: Response,
+    country: Optional[str] = None,
+    payload: Optional[UniverseRequest] = Body(default=None)
+):
     try:
+        target_country = country
+        if payload and payload.country:
+            target_country = payload.country
+            
+        if not target_country:
+            target_country = "Global"
+            
+        cache_key = f"uniarc:universe:{target_country.lower().strip()}"
+        cached = await redis_cache.get(cache_key)
+        if cached:
+            response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300"
+            return cached
+
         # Now returns a dictionary with top_stories, breaking_news, videos, newspaper_summary
-        news_data = await universe_collector.fetch_country_news(payload.country)
-        return {"status": "success", "news": news_data}
+        news_data = await universe_collector.fetch_country_news(target_country)
+        result = {"status": "success", "news": news_data}
+        await redis_cache.set(cache_key, result, ttl=300)
+        response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300"
+        return result
     except Exception as e:
         logger.error(f"Universe News Fetch Failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -1534,9 +1606,9 @@ async def get_all_articles(category: str = None, country: str = None, db: Sessio
     try:
         query = db.query(VerifiedNews)
         if category and category != 'All':
-            query = query.filter(VerifiedNews.category.ilike(category))
+            query = query.filter(VerifiedNews.category == category)
         if country:
-            query = query.filter(VerifiedNews.country.ilike(country))
+            query = query.filter(VerifiedNews.country == country)
             
         # LIFO: Impact score first (manual priority), then newest first
         articles = query.order_by(VerifiedNews.impact_score.desc(), VerifiedNews.created_at.desc()).all()
@@ -1569,7 +1641,7 @@ async def get_all_ads(db: Session = Depends(get_db)):
     """Fetch all campaign nodes (advertisements)"""
     try:
         ads = db.query(Advertisement).order_by(Advertisement.created_at.desc()).all()
-        return [ad.to_dict() for ad in ads]
+        return ads
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1611,7 +1683,7 @@ async def get_protocol_history(db: Session = Depends(get_db)):
     try:
         from src.database.models import ProtocolHistory
         history = db.query(ProtocolHistory).order_by(ProtocolHistory.timestamp.desc()).limit(100).all()
-        return [h.to_dict() for h in history]
+        return history
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1640,8 +1712,8 @@ async def get_all_newspapers(db: Session = Depends(get_db)):
     """Fetch all registered source nodes"""
     try:
         from src.database.models import Newspaper
-        papers = db.query(Newspaper).order_by(Newspaper.created_at.desc()).all()
-        return [p.to_dict() for p in papers]
+        papers = db.query(Newspaper).order_by(Newspaper.name.asc()).all()
+        return papers
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1795,11 +1867,9 @@ async def create_manual_student_article(payload: ManualStudentArticleRequest, db
             else:
                 raise ie
 
-        # Log Action
-        log_protocol_action(db, "deploy", "student_article", verified.id, details=f"Deployed manual student article: {payload.title}")
-        
-        # 4. Clear cache to force real-time sync
-        _student_news_caches.clear()
+        # 4. Clear cache to force real-time sync in Redis
+        await redis_cache.clear_pattern("uniarc:student:*")
+        await redis_cache.clear_pattern("uniarc:bootstrap:*")
         
         return {"success": True, "article": verified.to_dict()}
     except Exception as e:
@@ -1850,7 +1920,8 @@ async def update_article(article_id: int, payload: ManualStudentArticleRequest, 
         # Log Action
         log_protocol_action(db, "update", "article", article_id, details=f"Updated intelligence node: {payload.title}")
         
-        _student_news_caches.clear()
+        await redis_cache.clear_pattern("uniarc:student:*")
+        await redis_cache.clear_pattern("uniarc:bootstrap:*")
         return {"success": True, "article": article.to_dict()}
     except HTTPException: raise
     except Exception as e:
@@ -1873,7 +1944,8 @@ async def delete_article(article_id: int, db: Session = Depends(get_db)):
         # Log Action
         log_protocol_action(db, "delete", "article", article_id, details=f"Removed intelligence node: {article.title}")
         
-        _student_news_caches.clear()
+        await redis_cache.clear_pattern("uniarc:student:*")
+        await redis_cache.clear_pattern("uniarc:bootstrap:*")
         return {"success": True}
     except Exception as e:
         db.rollback()
@@ -1938,7 +2010,7 @@ async def get_user_personalized_news(
     if not user:
         # Fallback for guest: Just latest news
         stories = db.query(VerifiedNews).order_by(VerifiedNews.id.desc()).limit(20).all()
-        return {"status": "success", "stories": [normalize_article_data(s.to_dict()) for s in stories]}
+        return {"status": "success", "stories": [normalize_article_data(s) for s in stories]}
     
     # Get user interests
     subs = db.query(Subscription).filter(Subscription.user_id == user.id).all()
@@ -1967,18 +2039,69 @@ async def get_user_personalized_news(
         "interests": interests
     }
 
+async def _background_update_student_cache(country: str):
+    """Background task to fetch full student news including external sources without blocking the response."""
+    db = SessionLocal()
+    try:
+        logger.info(f"Running background revalidation for student cache ({country})")
+        await _update_student_cache_if_needed(db, force=True, country=country, local_only=False)
+    except Exception as e:
+        logger.error(f"Background student cache update failed: {e}")
+    finally:
+        db.close()
+
 @router.get("/api/v2/get-student-news")
 @router.get("/api/get-student-news")
-async def api_get_student_news(category: str = 'All Updates', country: str = 'Global', lang: str = 'english', page: int = 1, db: Session = Depends(get_db)):
+async def api_get_student_news(response: Response, category: str = 'All Updates', country: str = 'Global', lang: str = 'english', page: int = 1, db: Session = Depends(get_db)):
     """Async student news portal with automated translation and categorization."""
     try:
-        # --- CACHE MANAGEMENT ---
-        await _update_student_cache_if_needed(db, force=False, country=country)
+        # Check page-specific cache first
+        cache_key = f"uniarc:student:page:{category.lower().strip()}:{country.lower().strip()}:{lang.lower().strip()}:{page}"
+        cached_result = await redis_cache.get(cache_key)
+        if cached_result:
+            # Check if underlying student cache is stale to trigger background revalidation
+            target_name, _, _, _ = normalize_country(country)
+            country_key = target_name.lower()
+            redis_key = f"uniarc:student:{country_key}"
+            raw_cache = await redis_cache.get(redis_key)
+            if raw_cache:
+                last_updated_str = raw_cache.get("last_updated")
+                try:
+                    last_updated = datetime.fromisoformat(last_updated_str)
+                    is_stale = (datetime.utcnow() - last_updated).total_seconds() >= 1800 or raw_cache.get("local_only", False)
+                except Exception:
+                    is_stale = True
+                
+                if is_stale:
+                    asyncio.create_task(_background_update_student_cache(country))
+            
+            response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300"
+            return cached_result
+
+        # Fetch underlying student cache
         target_name, _, _, _ = normalize_country(country)
         country_key = target_name.lower()
+        redis_key = f"uniarc:student:{country_key}"
+        raw_cache = await redis_cache.get(redis_key)
         
-        articles = _student_news_caches.get(country_key, {}).get("articles", [])
-        trends = _student_news_caches.get(country_key, {}).get("trends", {})
+        if not raw_cache:
+            # Cache is empty. Rapid local_only load
+            logger.info(f"Student cache missing for {country}. Performing rapid local-only load.")
+            raw_cache = await _update_student_cache_if_needed(db, force=True, country=country, local_only=True)
+            asyncio.create_task(_background_update_student_cache(country))
+        else:
+            last_updated_str = raw_cache.get("last_updated")
+            try:
+                last_updated = datetime.fromisoformat(last_updated_str)
+                is_stale = (datetime.utcnow() - last_updated).total_seconds() >= 1800 or raw_cache.get("local_only", False)
+            except Exception:
+                is_stale = True
+            
+            if is_stale:
+                asyncio.create_task(_background_update_student_cache(country))
+
+        articles = raw_cache.get("articles", [])
+        trends = raw_cache.get("trends", {})
 
         # Category Filtering
         if category and category != 'All Updates' and category != 'All':
@@ -1992,7 +2115,6 @@ async def api_get_student_news(category: str = 'All Updates', country: str = 'Gl
         # Translation Injection (Perfection Restoration)
         if lang and lang.lower() != 'english' and page_articles:
             try:
-                # Normalize lang: e.g. "Telugu" -> "telugu"
                 normalized_lang = lang.strip().lower()
                 page_articles = await translator.translate_stories(page_articles, normalized_lang)
             except Exception as e:
@@ -2002,12 +2124,18 @@ async def api_get_student_news(category: str = 'All Updates', country: str = 'Gl
         for a in page_articles:
             normalize_article_data(a, strip_large_fields=True)
 
-        return {
+        result = {
             "status": "success",
             "articles": page_articles,
             "trends": trends,
             "has_more": len(articles) > end
         }
+
+        # Cache final formatted page response for 5 minutes (300 seconds)
+        await redis_cache.set(cache_key, result, ttl=300)
+        
+        response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300"
+        return result
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
@@ -2016,17 +2144,38 @@ async def api_get_student_news(category: str = 'All Updates', country: str = 'Gl
 
 @router.get("/api/v2/get-student-trends")
 @router.get("/api/get-student-trends")
-async def api_get_student_trends(country: str = "India", db: Session = Depends(get_db)):
+async def api_get_student_trends(response: Response, country: str = "India", db: Session = Depends(get_db)):
     """Async trends for student portal."""
-    await _update_student_cache_if_needed(db, force=False, country=country)
-    target_name, _, _, _ = normalize_country(country)
-    country_key = target_name.lower()
-    return {"status": "success", "trends": _student_news_caches.get(country_key, {}).get("trends", {})}
+    try:
+        target_name, _, _, _ = normalize_country(country)
+        country_key = target_name.lower()
+        redis_key = f"uniarc:student:{country_key}"
+        raw_cache = await redis_cache.get(redis_key)
+        
+        if not raw_cache:
+            raw_cache = await _update_student_cache_if_needed(db, force=True, country=country, local_only=True)
+            asyncio.create_task(_background_update_student_cache(country))
+        else:
+            last_updated_str = raw_cache.get("last_updated")
+            try:
+                last_updated = datetime.fromisoformat(last_updated_str)
+                is_stale = (datetime.utcnow() - last_updated).total_seconds() >= 1800 or raw_cache.get("local_only", False)
+            except Exception:
+                is_stale = True
+            
+            if is_stale:
+                asyncio.create_task(_background_update_student_cache(country))
+                
+        response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300"
+        return {"status": "success", "trends": raw_cache.get("trends", {})}
+    except Exception as e:
+        logger.error(f"Student trends failed: {e}")
+        return {"status": "success", "trends": {}}
 
 async def _fetch_newsdata_student_articles(db: Session, country_code: str):
     """Async fetch from NewsData.io with robust error handling and categorization."""
     import httpx
-    api_key = settings.NEWSDATA_STUDENT_API_KEY or "pub_87a3d48b48ba4c15955866088bd380c8"
+    api_key = settings.NEWSDATA_STUDENT_API_KEY
     
     # Categories to fetch
     fetch_cats = {
@@ -2102,6 +2251,20 @@ async def _fetch_newsdata_student_articles(db: Session, country_code: str):
             d['id'] = news.id
             d['image_url'] = news.image_url or get_fallback_image(news.title, "Education")
             d['urgency'] = "Medium"
+            
+            # Category Mapping
+            combined_text = f"{news.title} {news.content} {news.why_it_matters} {news.category}".lower()
+            if any(k in combined_text for k in ["scholarship", "internship", "fellowship", "stipend"]):
+                d['category'] = "Scholarships & Internships"
+            elif any(k in combined_text for k in ["jee", "neet", "cuet", "upsc", "ssc", "board exam", "exam result", "admit card"]):
+                d['category'] = "Exams & Results"
+            elif any(k in combined_text for k in ["admission", "course", "study abroad", "university", "college", "bachelors", "masters"]):
+                d['category'] = "Admissions & Courses"
+            elif any(k in combined_text for k in ["job", "recruitment", "fresher", "placement", "hiring", "career", "salary"]):
+                d['category'] = "Career & Jobs"
+            else:
+                d['category'] = "All Updates"
+                
             results.append(d)
             
         logger.info(f"Student Section: Total {len(results)} articles (including {len(internal_news)} from DB)")
@@ -2110,20 +2273,36 @@ async def _fetch_newsdata_student_articles(db: Session, country_code: str):
             
     return results
 
-async def _update_student_cache_if_needed(db: Session, force: bool = False, country: str = "Global"):
+async def _update_student_cache_if_needed(db: Session, force: bool = False, country: str = "Global", local_only: bool = False):
     """Manages the background aggregation of both internal verified news and external student-specific news feeds."""
-    global _student_news_caches
     now = datetime.utcnow()
     target_name, country_keys, _, actual_code = normalize_country(country)
     country_key = target_name.lower()
+    redis_key = f"uniarc:student:{country_key}"
     
-    cache = _student_news_caches.get(country_key, {"articles": [], "trends": {}, "last_updated": datetime(2000, 1, 1)})
+    # Get from Redis
+    cache = await redis_cache.get(redis_key)
+    if not cache:
+        cache = {"articles": [], "trends": {}, "last_updated": datetime(2000, 1, 1).isoformat(), "local_only": True}
     
-    # Refresh every 30 minutes unless forced
-    if not force and cache.get("last_updated") and (now - cache["last_updated"]).total_seconds() < 1800:
+    last_updated_str = cache.get("last_updated")
+    try:
+        last_updated = datetime.fromisoformat(last_updated_str)
+    except Exception:
+        last_updated = datetime(2000, 1, 1)
+
+    is_local_only = cache.get("local_only", False)
+
+    # Refresh if:
+    # 1. force is True OR
+    # 2. Cache is stale (over 30 minutes) OR
+    # 3. Cache was loaded as local_only (placeholder) and we are now doing a full refresh
+    needs_refresh = force or (now - last_updated).total_seconds() >= 1800 or (is_local_only and not local_only)
+
+    if not needs_refresh:
         return cache
 
-    logger.info(f"Refreshing Student Portal Cache for: {target_name}")
+    logger.info(f"Refreshing Student Portal Cache in Redis for: {target_name} (local_only={local_only})")
     
     match_keys = [target_name]
     if target_name == "India": match_keys.append("IN")
@@ -2140,8 +2319,11 @@ async def _update_student_cache_if_needed(db: Session, force: bool = False, coun
     
     # 2. Fetch External News (Async)
     external_articles = []
-    if actual_code and actual_code.lower() != "global":
-        external_articles = await _fetch_newsdata_student_articles(db, actual_code)
+    if not local_only and actual_code and actual_code.lower() != "global":
+        try:
+            external_articles = await _fetch_newsdata_student_articles(db, actual_code)
+        except Exception as e:
+            logger.error(f"External student articles fetch failed: {e}")
 
     # 3. Process and Categorize
     processed_articles = []
@@ -2167,8 +2349,18 @@ async def _update_student_cache_if_needed(db: Session, force: bool = False, coun
         if art_url in seen_urls: continue
         seen_urls.add(art_url)
         
-        is_student_cat = any(sc.lower() in (art.category or "").lower() for sc in STUDENT_NEWS_CATEGORIES)
-        cat = art.category if is_student_cat else "All Updates"
+        # Map into exact categories requested by the user
+        combined_text = f"{art.title} {art.content} {art.why_it_matters} {art.category}".lower()
+        if any(k in combined_text for k in ["scholarship", "internship", "fellowship", "stipend"]):
+            cat = "Scholarships & Internships"
+        elif any(k in combined_text for k in ["jee", "neet", "cuet", "upsc", "ssc", "board exam", "exam result", "admit card"]):
+            cat = "Exams & Results"
+        elif any(k in combined_text for k in ["admission", "course", "study abroad", "university", "college", "bachelors", "masters"]):
+            cat = "Admissions & Courses"
+        elif any(k in combined_text for k in ["job", "recruitment", "fresher", "placement", "hiring", "career", "salary"]):
+            cat = "Career & Jobs"
+        else:
+            cat = "All Updates"
         
         # Use existing normalization for consistency
         normalized = normalize_article_data(art.to_dict())
@@ -2194,16 +2386,20 @@ async def _update_student_cache_if_needed(db: Session, force: bool = False, coun
     processed_articles.sort(key=lambda x: (x.get("trend_score", 0), x.get("published_at", "")), reverse=True)
     
     # Update Cache
-    cache["articles"] = processed_articles
-    cache["trends"] = {
-        "total_articles": len(processed_articles),
-        "scholarship_count": scholarship_count,
-        "category_counts": category_counts,
-        "most_discussed_topic": "Scholarships" if scholarship_count > 5 else "Exams"
+    new_cache = {
+        "articles": processed_articles,
+        "trends": {
+            "total_articles": len(processed_articles),
+            "scholarship_count": scholarship_count,
+            "category_counts": dict(category_counts),
+            "most_discussed_topic": "Scholarships" if scholarship_count > 5 else "Exams"
+        },
+        "last_updated": now.isoformat(),
+        "local_only": local_only
     }
-    cache["last_updated"] = now
-    _student_news_caches[country_key] = cache
-    return cache
+    
+    await redis_cache.set(redis_key, new_cache, ttl=1800)
+    return new_cache
 
 # --- PERSONAL AI NEWS AGENT ---
 

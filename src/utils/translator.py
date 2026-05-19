@@ -388,7 +388,8 @@ class NewsTranslator:
         
         try:
             untranslated_indices = await asyncio.to_thread(_load_cache_sync)
-            if not untranslated_indices: return node_data
+            if not untranslated_indices:
+                return node_data
 
             to_translate_full = [stories[i] for i in untranslated_indices]
             batch_size = 4
@@ -397,7 +398,8 @@ class NewsTranslator:
             async def translate_batch(batch_items, b_idx):
                 async with self._concurrency_limit:
                     key, k_idx = self._get_best_key()
-                    if not key: return []
+                    if not key:
+                        return []
                     client, provider = self._get_client_by_key(key)
                     await asyncio.sleep(b_idx * 0.4) 
                 
@@ -428,7 +430,8 @@ class NewsTranslator:
 
                     except Exception as e:
                         key, k_idx = self._get_best_key()
-                        if not key: break
+                        if not key:
+                            break
                         client, provider = self._get_client_by_key(key)
                 
                 # BATCH FAILBACK: Parallel single-item translation fallback
